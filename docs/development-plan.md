@@ -488,7 +488,7 @@ interface GenAiTraceSummary {
 
 ## 10. MCP 设计
 
-MCP 是 v1 必备，不放到最后作为附加项。默认 stdio，后续可选 Streamable HTTP。
+MCP 是 v1 必备，不放到最后作为附加项。当前实现已支持 stdio 和 Streamable HTTP 两种 transport。
 
 建议 tools：
 
@@ -907,27 +907,27 @@ v1 完成定义：
 截至当前代码版本，已落地：
 
 - pnpm workspace：`apps/server`、`apps/web`、`packages/cli`。
-- Buf generation workflow：`packages/otel-proto` 可生成官方 OTLP TypeScript bindings。
+- Buf generation workflow：`packages/otel-proto` 可生成官方 OTLP JavaScript bindings 与 TypeScript declarations，protobuf ingest hot path 已使用生成类型。
 - OTLP/HTTP：`/v1/traces`、`/v1/logs`、`/v1/metrics`，支持 JSON、protobuf、gzip。
 - OTLP/gRPC：`TraceService.Export`、`LogsService.Export`、`MetricsService.Export` unary 接收。
 - Memory store：spans/logs/metrics/batches ring buffer。
 - SQLite store：raw batches、spans、logs、metric_points、trace_summaries，WAL，重启持久化，DB size retention。
 - API：resources、traces、trace detail、logs、metrics、metric series、GenAI trace、export/import、retention、clear，支持 cursor/time range。
-- UI：Traces、Logs、Metrics、GenAI summary/timeline/RAG document 视图。
-- GenAI：多来源 span classifier、token/cost summary、tool/RAG counters、retrieved document extraction、normalized-data redaction。
+- UI：Traces、Logs、Metrics、GenAI summary/timeline/conversation/RAG document 视图，长列表使用轻量 virtualization。
+- GenAI：多来源 span classifier、token/cost summary、tool/RAG counters、retrieved document extraction、conversation reconstruction、normalized-data redaction。
+- Metrics：gauge/sum/histogram/exponential histogram/summary 基础归一化，保留 temporality、monotonicity、exemplars、distribution metadata。
 - Metrics protection：metric attribute set cardinality limit。
+- Ingest protection：HTTP/gRPC ingest backpressure guard。
 - CLI：serve、clear、export、import、retention、open、mcp、mcp-http。
 - MCP stdio：resources/errors/traces/logs/GenAI/slow-operation tools。
 - MCP Streamable HTTP：`/mcp` endpoint 可供 IDE/plugin 集成。
 - Dockerfile：本地构建后暴露 `18888`、`4317`、`4318`。
-- Examples：Python Agent、TypeScript Agent、.NET WebAPI 接入说明。
-- 测试：HTTP JSON/protobuf/gzip、gRPC protobuf、SQLite persistence、metrics query、export/import、retention、DB size retention、redaction、pagination/time range、RAG documents、metric cardinality。
+- Examples：Python Agent、TypeScript Agent、.NET WebAPI runnable smoke app。
+- Release：GitHub Actions CI、CLI package metadata、`pnpm release:dry-run` pack workflow。
+- 测试：HTTP JSON/protobuf/gzip、gRPC protobuf、SQLite persistence、metrics query、histogram/exemplar metadata、export/import、retention、DB size retention、redaction、pagination/time range、RAG documents、GenAI conversation、metric cardinality。
 
-仍需后续强化：
+后续产品化可选项：
 
-- 将 ingest hot path 从当前轻量 protobuf reader 迁移到 `packages/otel-proto` 生成类型。
-- 完整 metrics histogram/exemplar 展示与更准确 temporality 处理。
-- 更完整 Agent conversation reconstruction。
-- UI virtualization、ingest backpressure。
-- `npx` 发布前的 package exports/bin 整理和 release workflow。
-- .NET 示例从接入说明扩展成完整可运行项目。
+- npm scope/package name 确认后执行真实 publish。
+- 增加大批量 load fixtures 和 UI 截图回归。
+- 增加更完整的成本模型配置。

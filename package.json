@@ -10,7 +10,8 @@
     "build": "pnpm -r build",
     "check": "pnpm -r check",
     "test": "pnpm -r test",
-    "proto:generate": "pnpm --filter @devdash/otel-proto generate"
+    "proto:generate": "pnpm --filter @devdash/otel-proto generate",
+    "release:dry-run": "./scripts/release-dry-run.sh"
   },
   "engines": {
     "node": ">=22"

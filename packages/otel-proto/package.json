@@ -4,11 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    "./generated/*": "./generated/*.js"
+    "./generated/*": {
+      "types": "./generated/*.d.ts",
+      "import": "./generated/*.js"
+    }
   },
   "scripts": {
     "generate": "buf generate buf.build/opentelemetry/opentelemetry --template buf.gen.yaml --path opentelemetry/proto/collector/trace/v1/trace_service.proto --path opentelemetry/proto/collector/logs/v1/logs_service.proto --path opentelemetry/proto/collector/metrics/v1/metrics_service.proto --path opentelemetry/proto/trace/v1/trace.proto --path opentelemetry/proto/logs/v1/logs.proto --path opentelemetry/proto/metrics/v1/metrics.proto",
-    "check": "test -f generated/opentelemetry/proto/collector/trace/v1/trace_service_pb.ts",
+    "check": "test -f generated/opentelemetry/proto/collector/trace/v1/trace_service_pb.js && test -f generated/opentelemetry/proto/collector/trace/v1/trace_service_pb.d.ts",
     "build": "pnpm run check",
     "test": "pnpm run check"
   },

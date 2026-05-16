@@ -1,14 +1,20 @@
 import { nanoid } from "nanoid";
+import { fromBinary } from "@bufbuild/protobuf";
+import { ExportLogsServiceRequestSchema } from "@devdash/otel-proto/generated/opentelemetry/proto/collector/logs/v1/logs_service_pb";
+import { ExportMetricsServiceRequestSchema } from "@devdash/otel-proto/generated/opentelemetry/proto/collector/metrics/v1/metrics_service_pb";
+import { ExportTraceServiceRequestSchema } from "@devdash/otel-proto/generated/opentelemetry/proto/collector/trace/v1/trace_service_pb";
+import type { AnyValue, InstrumentationScope, KeyValue } from "@devdash/otel-proto/generated/opentelemetry/proto/common/v1/common_pb";
+import type {
+  Exemplar,
+  ExponentialHistogramDataPoint,
+  HistogramDataPoint,
+  Metric as OtlpMetric,
+  NumberDataPoint,
+  SummaryDataPoint
+} from "@devdash/otel-proto/generated/opentelemetry/proto/metrics/v1/metrics_pb";
+import type { Resource } from "@devdash/otel-proto/generated/opentelemetry/proto/resource/v1/resource_pb";
+import type { Span as OtlpSpan, Span_Event, Span_Link } from "@devdash/otel-proto/generated/opentelemetry/proto/trace/v1/trace_pb";
 import type { AttributeMap, IngestBatch, NormalizedLogRecord, NormalizedMetricPoint, NormalizedSpan, OtlpProtocol, RawOtlpBatch, TelemetrySignal } from "../store/types.js";
-import {
-  decodeProtoMessage,
-  fixed64Field,
-  hexBytesField,
-  repeatedNested,
-  stringField,
-  varintField,
-  type ProtoMessage
-} from "../otlp/protobufReader.js";
 import { redactAttribute, redactLogBody } from "./redact.js";
 
 interface DecodeContext {
@@ -177,34 +183,34 @@ function normalizeMetricsJson(payload: unknown, batchId: string): NormalizedMetr
 }
 
 function normalizeTraceProto(body: Uint8Array, batchId: string): NormalizedSpan[] {
-  const request = decodeProtoMessage(body);
+  const request = fromBinary(ExportTraceServiceRequestSchema, body);
   const result: NormalizedSpan[] = [];
 
-  for (const resourceSpans of repeatedNested(request, 1)) {
-    const resource = readResource(resourceSpans);
+  for (const resourceSpans of request.resourceSpans) {
+    const resource = resourceToMap(resourceSpans.resource);
     const serviceName = serviceNameFrom(resource);
-    for (const scopeSpans of repeatedNested(resourceSpans, 2)) {
-      const scope = readScope(scopeSpans);
-      for (const span of repeatedNested(scopeSpans, 2)) {
-        const start = String(fixed64Field(span, 7) ?? 0n);
-        const end = String(fixed64Field(span, 8) ?? fixed64Field(span, 7) ?? 0n);
+    for (const scopeSpans of resourceSpans.scopeSpans) {
+      const scope = scopeToMap(scopeSpans.scope);
+      for (const span of scopeSpans.spans) {
+        const start = nanoString(span.startTimeUnixNano);
+        const end = nanoString(span.endTimeUnixNano || span.startTimeUnixNano);
         result.push({
-          traceId: hexBytesField(span, 1) ?? "",
-          spanId: hexBytesField(span, 2) ?? "",
-          parentSpanId: hexBytesField(span, 4),
+          traceId: bytesToHex(span.traceId),
+          spanId: bytesToHex(span.spanId),
+          parentSpanId: optionalHex(span.parentSpanId),
           serviceName,
-          name: stringField(span, 5) ?? "(unnamed span)",
-          kind: numberFromBigint(varintField(span, 6)),
+          name: span.name || "(unnamed span)",
+          kind: span.kind,
           startTimeUnixNano: start,
           endTimeUnixNano: end,
           durationNano: durationNano(start, end),
-          statusCode: readStatusCode(span),
-          statusMessage: readStatusMessage(span),
+          statusCode: span.status ? span.status.code : undefined,
+          statusMessage: span.status?.message || undefined,
           resource,
           scope,
-          attributes: readAttributes(span, 9),
-          events: repeatedNested(span, 11).map(readSpanEvent),
-          links: repeatedNested(span, 13).map(readSpanLink),
+          attributes: keyValuesToMap(span.attributes),
+          events: span.events.map(spanEventToJson),
+          links: span.links.map(spanLinkToJson),
           batchId
         });
       }
@@ -215,31 +221,31 @@ function normalizeTraceProto(body: Uint8Array, batchId: string): NormalizedSpan[
 }
 
 function normalizeLogsProto(body: Uint8Array, batchId: string): NormalizedLogRecord[] {
-  const request = decodeProtoMessage(body);
+  const request = fromBinary(ExportLogsServiceRequestSchema, body);
   const result: NormalizedLogRecord[] = [];
 
-  for (const resourceLogs of repeatedNested(request, 1)) {
-    const resource = readResource(resourceLogs);
+  for (const resourceLogs of request.resourceLogs) {
+    const resource = resourceToMap(resourceLogs.resource);
     const serviceName = serviceNameFrom(resource);
-    for (const scopeLogs of repeatedNested(resourceLogs, 2)) {
-      const scope = readScope(scopeLogs);
-      for (const log of repeatedNested(scopeLogs, 2)) {
-        const bodyValue = readAnyValueFromField(log, 5);
+    for (const scopeLogs of resourceLogs.scopeLogs) {
+      const scope = scopeToMap(scopeLogs.scope);
+      for (const log of scopeLogs.logRecords) {
+        const bodyValue = anyValueProto(log.body);
         const safeBody = redactLogBody(bodyValue);
         result.push({
           id: nanoid(12),
-          traceId: hexBytesField(log, 9),
-          spanId: hexBytesField(log, 10),
+          traceId: optionalHex(log.traceId),
+          spanId: optionalHex(log.spanId),
           serviceName,
-          severityNumber: numberFromBigint(varintField(log, 2)),
-          severityText: stringField(log, 3),
-          timeUnixNano: stringFromBigint(fixed64Field(log, 1)),
-          observedTimeUnixNano: stringFromBigint(fixed64Field(log, 11)),
+          severityNumber: log.severityNumber || undefined,
+          severityText: log.severityText || undefined,
+          timeUnixNano: optionalNanoString(log.timeUnixNano),
+          observedTimeUnixNano: optionalNanoString(log.observedTimeUnixNano),
           bodyText: typeof safeBody === "string" ? safeBody : undefined,
           bodyJson: typeof safeBody === "string" ? undefined : safeBody,
           resource,
           scope,
-          attributes: readAttributes(log, 6),
+          attributes: keyValuesToMap(log.attributes),
           batchId
         });
       }
@@ -250,137 +256,22 @@ function normalizeLogsProto(body: Uint8Array, batchId: string): NormalizedLogRec
 }
 
 function normalizeMetricsProto(body: Uint8Array, batchId: string): NormalizedMetricPoint[] {
-  const request = decodeProtoMessage(body);
+  const request = fromBinary(ExportMetricsServiceRequestSchema, body);
   const result: NormalizedMetricPoint[] = [];
 
-  for (const resourceMetrics of repeatedNested(request, 1)) {
-    const resource = readResource(resourceMetrics);
+  for (const resourceMetrics of request.resourceMetrics) {
+    const resource = resourceToMap(resourceMetrics.resource);
     const serviceName = serviceNameFrom(resource);
-    for (const scopeMetrics of repeatedNested(resourceMetrics, 2)) {
-      const scope = readScope(scopeMetrics);
+    for (const scopeMetrics of resourceMetrics.scopeMetrics) {
+      const scope = scopeToMap(scopeMetrics.scope);
       const meterName = typeof scope.name === "string" ? scope.name : "unknown-meter";
-      for (const metric of repeatedNested(scopeMetrics, 2)) {
-        const metricName = stringField(metric, 1) ?? "unknown.metric";
-        const description = stringField(metric, 2);
-        const unit = stringField(metric, 3);
-        const gauge = repeatedNested(metric, 5)[0];
-        const sum = repeatedNested(metric, 7)[0];
-
-        if (gauge) {
-          for (const point of repeatedNested(gauge, 1)) {
-            result.push(numberDataPointToMetric({ point, serviceName, meterName, metricName, metricType: "gauge", description, unit, batchId }));
-          }
-        }
-        if (sum) {
-          const temporality = numberFromBigint(varintField(sum, 2));
-          const isMonotonic = varintField(sum, 3) === 1n;
-          for (const point of repeatedNested(sum, 1)) {
-            result.push(numberDataPointToMetric({ point, serviceName, meterName, metricName, metricType: "sum", description, unit, temporality, isMonotonic, batchId }));
-          }
-        }
+      for (const metric of scopeMetrics.metrics) {
+        result.push(...metricProtoToPoints(metric, serviceName, meterName, batchId));
       }
     }
   }
 
   return result;
-}
-
-function readResource(container: ProtoMessage): AttributeMap {
-  const resource = repeatedNested(container, 1)[0];
-  return resource ? readAttributes(resource, 1) : {};
-}
-
-function readScope(container: ProtoMessage): AttributeMap {
-  const scope = repeatedNested(container, 1)[0];
-  if (!scope) {
-    return {};
-  }
-  return {
-    name: stringField(scope, 1),
-    version: stringField(scope, 2),
-    attributes: readAttributes(scope, 3)
-  };
-}
-
-function readAttributes(message: ProtoMessage, fieldNumber: number): AttributeMap {
-  const attrs: AttributeMap = {};
-  for (const attr of repeatedNested(message, fieldNumber)) {
-    const key = stringField(attr, 1);
-    if (!key) {
-      continue;
-    }
-    attrs[key] = readAnyValueFromField(attr, 2);
-  }
-  return attrs;
-}
-
-function readAnyValueFromField(message: ProtoMessage, fieldNumber: number): unknown {
-  const value = repeatedNested(message, fieldNumber)[0];
-  if (!value) {
-    return undefined;
-  }
-  const stringValue = stringField(value, 1);
-  if (stringValue !== undefined) {
-    return stringValue;
-  }
-  const boolValue = varintField(value, 2);
-  if (boolValue !== undefined) {
-    return boolValue !== 0n;
-  }
-  const intValue = varintField(value, 3);
-  if (intValue !== undefined) {
-    return Number(intValue);
-  }
-  const doubleValue = fixed64Field(value, 4);
-  if (doubleValue !== undefined) {
-    const buffer = new ArrayBuffer(8);
-    new DataView(buffer).setBigUint64(0, doubleValue, true);
-    return new DataView(buffer).getFloat64(0, true);
-  }
-  const arrayValue = repeatedNested(value, 5)[0];
-  if (arrayValue) {
-    return repeatedNested(arrayValue, 1).map((item) => readAnyValueMessage(item));
-  }
-  const kvListValue = repeatedNested(value, 6)[0];
-  if (kvListValue) {
-    return readAttributes(kvListValue, 1);
-  }
-  return undefined;
-}
-
-function readAnyValueMessage(value: ProtoMessage): unknown {
-  const wrapper: ProtoMessage = new Map([[2, [{ wireType: 2, value: encodeNestedUnsupported(value) }]]]);
-  return readAnyValueFromField(wrapper, 2);
-}
-
-function encodeNestedUnsupported(_value: ProtoMessage): Uint8Array {
-  return new Uint8Array();
-}
-
-function readSpanEvent(event: ProtoMessage) {
-  return {
-    timeUnixNano: stringFromBigint(fixed64Field(event, 1)),
-    name: stringField(event, 2),
-    attributes: readAttributes(event, 3)
-  };
-}
-
-function readSpanLink(link: ProtoMessage) {
-  return {
-    traceId: hexBytesField(link, 1),
-    spanId: hexBytesField(link, 2),
-    attributes: readAttributes(link, 4)
-  };
-}
-
-function readStatusCode(span: ProtoMessage): number | undefined {
-  const status = repeatedNested(span, 15)[0];
-  return status ? numberFromBigint(varintField(status, 3)) : undefined;
-}
-
-function readStatusMessage(span: ProtoMessage): string | undefined {
-  const status = repeatedNested(span, 15)[0];
-  return status ? stringField(status, 2) : undefined;
 }
 
 function metricJsonToPoints(metric: Record<string, unknown>, serviceName: string, meterName: string, batchId: string): NormalizedMetricPoint[] {
@@ -420,9 +311,37 @@ function metricJsonToPoints(metric: Record<string, unknown>, serviceName: string
       attributesHash: hashAttributes(attributes),
       attributes,
       exemplars: arrayOrEmpty(point.exemplars),
+      distribution: distributionFromJsonPoint(metricType, point),
       batchId
     };
   });
+}
+
+function distributionFromJsonPoint(metricType: string, point: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (metricType === "histogram") {
+    return {
+      kind: "explicit",
+      explicitBounds: arrayOfNumbers(point.explicitBounds),
+      bucketCounts: arrayOfNumbers(point.bucketCounts)
+    };
+  }
+  if (metricType === "exponentialHistogram") {
+    return {
+      kind: "exponential",
+      scale: numberOrUndefined(point.scale),
+      zeroCount: numberOrUndefined(point.zeroCount),
+      zeroThreshold: numberOrUndefined(point.zeroThreshold),
+      positive: point.positive,
+      negative: point.negative
+    };
+  }
+  if (metricType === "summary") {
+    return {
+      kind: "summary",
+      quantiles: point.quantileValues
+    };
+  }
+  return undefined;
 }
 
 function metricPayload(metric: Record<string, unknown>): [string, Record<string, unknown> | undefined] {
@@ -434,8 +353,78 @@ function metricPayload(metric: Record<string, unknown>): [string, Record<string,
   return ["unknown", undefined];
 }
 
+function metricProtoToPoints(metric: OtlpMetric, serviceName: string, meterName: string, batchId: string): NormalizedMetricPoint[] {
+  const metricName = metric.name || "unknown.metric";
+  const description = metric.description || undefined;
+  const unit = metric.unit || undefined;
+  const data = metric.data;
+  switch (data.case) {
+    case "gauge":
+      return data.value.dataPoints.map((point) => numberDataPointToMetric({
+        point,
+        serviceName,
+        meterName,
+        metricName,
+        metricType: "gauge",
+        description,
+        unit,
+        batchId
+      }));
+    case "sum":
+      return data.value.dataPoints.map((point) => numberDataPointToMetric({
+        point,
+        serviceName,
+        meterName,
+        metricName,
+        metricType: "sum",
+        description,
+        unit,
+        temporality: data.value.aggregationTemporality,
+        isMonotonic: data.value.isMonotonic,
+        batchId
+      }));
+    case "histogram":
+      return data.value.dataPoints.map((point) => histogramDataPointToMetric({
+        point,
+        serviceName,
+        meterName,
+        metricName,
+        metricType: "histogram",
+        description,
+        unit,
+        temporality: data.value.aggregationTemporality,
+        batchId
+      }));
+    case "exponentialHistogram":
+      return data.value.dataPoints.map((point) => exponentialHistogramDataPointToMetric({
+        point,
+        serviceName,
+        meterName,
+        metricName,
+        metricType: "exponentialHistogram",
+        description,
+        unit,
+        temporality: data.value.aggregationTemporality,
+        batchId
+      }));
+    case "summary":
+      return data.value.dataPoints.map((point) => summaryDataPointToMetric({
+        point,
+        serviceName,
+        meterName,
+        metricName,
+        metricType: "summary",
+        description,
+        unit,
+        batchId
+      }));
+    default:
+      return [];
+  }
+}
+
 function numberDataPointToMetric(input: {
-  point: ProtoMessage;
+  point: NumberDataPoint;
   serviceName: string;
   meterName: string;
   metricName: string;
@@ -446,10 +435,8 @@ function numberDataPointToMetric(input: {
   isMonotonic?: boolean | undefined;
   batchId: string;
 }): NormalizedMetricPoint {
-  const attributes = readAttributes(input.point, 7);
-  const intValue = numberFromBigint(varintField(input.point, 6));
-  const doubleValue = fixed64Field(input.point, 4);
-  const value = intValue ?? (doubleValue === undefined ? undefined : fixed64ToDouble(doubleValue));
+  const attributes = keyValuesToMap(input.point.attributes);
+  const value = oneofNumber(input.point.value);
   return {
     id: nanoid(12),
     serviceName: input.serviceName,
@@ -460,12 +447,132 @@ function numberDataPointToMetric(input: {
     unit: input.unit,
     temporality: input.temporality,
     isMonotonic: input.isMonotonic,
-    startTimeUnixNano: stringFromBigint(fixed64Field(input.point, 2)),
-    timeUnixNano: stringFromBigint(fixed64Field(input.point, 3)) ?? String(Date.now() * 1_000_000),
+    startTimeUnixNano: optionalNanoString(input.point.startTimeUnixNano),
+    timeUnixNano: optionalNanoString(input.point.timeUnixNano) ?? String(Date.now() * 1_000_000),
     value,
     attributesHash: hashAttributes(attributes),
     attributes,
+    exemplars: exemplarsToJson(input.point.exemplars),
+    batchId: input.batchId
+  };
+}
+
+function histogramDataPointToMetric(input: {
+  point: HistogramDataPoint;
+  serviceName: string;
+  meterName: string;
+  metricName: string;
+  metricType: string;
+  description?: string | undefined;
+  unit?: string | undefined;
+  temporality?: number | undefined;
+  batchId: string;
+}): NormalizedMetricPoint {
+  const attributes = keyValuesToMap(input.point.attributes);
+  return {
+    id: nanoid(12),
+    serviceName: input.serviceName,
+    meterName: input.meterName,
+    metricName: input.metricName,
+    metricType: input.metricType,
+    description: input.description,
+    unit: input.unit,
+    temporality: input.temporality,
+    startTimeUnixNano: optionalNanoString(input.point.startTimeUnixNano),
+    timeUnixNano: optionalNanoString(input.point.timeUnixNano) ?? String(Date.now() * 1_000_000),
+    value: input.point.sum,
+    count: Number(input.point.count),
+    sum: input.point.sum,
+    min: input.point.min,
+    max: input.point.max,
+    attributesHash: hashAttributes(attributes),
+    attributes,
+    exemplars: exemplarsToJson(input.point.exemplars),
+    distribution: {
+      kind: "explicit",
+      explicitBounds: input.point.explicitBounds,
+      bucketCounts: input.point.bucketCounts.map(Number)
+    },
+    batchId: input.batchId
+  };
+}
+
+function exponentialHistogramDataPointToMetric(input: {
+  point: ExponentialHistogramDataPoint;
+  serviceName: string;
+  meterName: string;
+  metricName: string;
+  metricType: string;
+  description?: string | undefined;
+  unit?: string | undefined;
+  temporality?: number | undefined;
+  batchId: string;
+}): NormalizedMetricPoint {
+  const attributes = keyValuesToMap(input.point.attributes);
+  return {
+    id: nanoid(12),
+    serviceName: input.serviceName,
+    meterName: input.meterName,
+    metricName: input.metricName,
+    metricType: input.metricType,
+    description: input.description,
+    unit: input.unit,
+    temporality: input.temporality,
+    startTimeUnixNano: optionalNanoString(input.point.startTimeUnixNano),
+    timeUnixNano: optionalNanoString(input.point.timeUnixNano) ?? String(Date.now() * 1_000_000),
+    value: input.point.sum,
+    count: Number(input.point.count),
+    sum: input.point.sum,
+    min: input.point.min,
+    max: input.point.max,
+    attributesHash: hashAttributes(attributes),
+    attributes,
+    exemplars: exemplarsToJson(input.point.exemplars),
+    distribution: {
+      kind: "exponential",
+      scale: input.point.scale,
+      zeroCount: Number(input.point.zeroCount),
+      zeroThreshold: input.point.zeroThreshold,
+      positive: input.point.positive ? { offset: input.point.positive.offset, bucketCounts: input.point.positive.bucketCounts.map(Number) } : undefined,
+      negative: input.point.negative ? { offset: input.point.negative.offset, bucketCounts: input.point.negative.bucketCounts.map(Number) } : undefined
+    },
+    batchId: input.batchId
+  };
+}
+
+function summaryDataPointToMetric(input: {
+  point: SummaryDataPoint;
+  serviceName: string;
+  meterName: string;
+  metricName: string;
+  metricType: string;
+  description?: string | undefined;
+  unit?: string | undefined;
+  batchId: string;
+}): NormalizedMetricPoint {
+  const attributes = keyValuesToMap(input.point.attributes);
+  return {
+    id: nanoid(12),
+    serviceName: input.serviceName,
+    meterName: input.meterName,
+    metricName: input.metricName,
+    metricType: input.metricType,
+    description: input.description,
+    unit: input.unit,
+    startTimeUnixNano: optionalNanoString(input.point.startTimeUnixNano),
+    timeUnixNano: optionalNanoString(input.point.timeUnixNano) ?? String(Date.now() * 1_000_000),
+    value: input.point.sum,
+    count: Number(input.point.count),
+    sum: input.point.sum,
+    min: input.point.quantileValues.find((item) => item.quantile === 0)?.value,
+    max: input.point.quantileValues.find((item) => item.quantile === 1)?.value,
+    attributesHash: hashAttributes(attributes),
+    attributes,
     exemplars: [],
+    distribution: {
+      kind: "summary",
+      quantiles: input.point.quantileValues.map((item) => ({ quantile: item.quantile, value: item.value }))
+    },
     batchId: input.batchId
   };
 }
@@ -484,6 +591,86 @@ function attributesToMap(input: unknown): AttributeMap {
     attrs[key] = redactAttribute(key, anyValueJson(record.value));
   }
   return attrs;
+}
+
+function resourceToMap(resource: Resource | undefined): AttributeMap {
+  return keyValuesToMap(resource?.attributes ?? []);
+}
+
+function scopeToMap(scope: InstrumentationScope | undefined): AttributeMap {
+  if (!scope) {
+    return {};
+  }
+  return {
+    name: scope.name || undefined,
+    version: scope.version || undefined,
+    attributes: keyValuesToMap(scope.attributes)
+  };
+}
+
+function keyValuesToMap(input: KeyValue[]): AttributeMap {
+  const attrs: AttributeMap = {};
+  for (const attr of input) {
+    if (!attr.key) {
+      continue;
+    }
+    attrs[attr.key] = redactAttribute(attr.key, anyValueProto(attr.value));
+  }
+  return attrs;
+}
+
+function anyValueProto(input: AnyValue | undefined): unknown {
+  if (!input) {
+    return undefined;
+  }
+  switch (input.value.case) {
+    case "stringValue":
+    case "boolValue":
+    case "doubleValue":
+      return input.value.value;
+    case "intValue":
+      return Number(input.value.value);
+    case "arrayValue":
+      return input.value.value.values.map(anyValueProto);
+    case "kvlistValue":
+      return keyValuesToMap(input.value.value.values);
+    case "bytesValue":
+      return bytesToHex(input.value.value);
+    default:
+      return undefined;
+  }
+}
+
+function spanEventToJson(event: Span_Event) {
+  return {
+    timeUnixNano: nanoString(event.timeUnixNano),
+    name: event.name,
+    attributes: keyValuesToMap(event.attributes)
+  };
+}
+
+function spanLinkToJson(link: Span_Link) {
+  return {
+    traceId: bytesToHex(link.traceId),
+    spanId: bytesToHex(link.spanId),
+    attributes: keyValuesToMap(link.attributes)
+  };
+}
+
+function exemplarsToJson(exemplars: Exemplar[]): Array<Record<string, unknown>> {
+  return exemplars.map((exemplar) => ({
+    timeUnixNano: optionalNanoString(exemplar.timeUnixNano),
+    value: oneofNumber(exemplar.value),
+    traceId: optionalHex(exemplar.traceId),
+    spanId: optionalHex(exemplar.spanId),
+    filteredAttributes: keyValuesToMap(exemplar.filteredAttributes)
+  }));
+}
+
+function oneofNumber(value: { case: "asDouble"; value: number } | { case: "asInt"; value: bigint } | { case: undefined; value?: undefined }): number | undefined {
+  if (value.case === "asDouble") return value.value;
+  if (value.case === "asInt") return Number(value.value);
+  return undefined;
 }
 
 function anyValueJson(input: unknown): unknown {
@@ -520,10 +707,21 @@ function normalizeHex(value: string): string {
   return value.replace(/^0x/, "").toLowerCase();
 }
 
-function fixed64ToDouble(value: bigint): number {
-  const buffer = new ArrayBuffer(8);
-  new DataView(buffer).setBigUint64(0, value, true);
-  return new DataView(buffer).getFloat64(0, true);
+function bytesToHex(value: Uint8Array): string {
+  return Buffer.from(value).toString("hex");
+}
+
+function optionalHex(value: Uint8Array): string | undefined {
+  const hex = bytesToHex(value);
+  return hex ? hex : undefined;
+}
+
+function nanoString(value: bigint): string {
+  return String(value);
+}
+
+function optionalNanoString(value: bigint): string | undefined {
+  return value === 0n ? undefined : String(value);
 }
 
 function hashAttributes(attributes: AttributeMap): string {
@@ -549,14 +747,6 @@ function numberOrUndefined(value: unknown): number | undefined {
   return undefined;
 }
 
-function numberFromBigint(value: bigint | undefined): number | undefined {
-  return value === undefined ? undefined : Number(value);
-}
-
-function stringFromBigint(value: bigint | undefined): string | undefined {
-  return value === undefined ? undefined : String(value);
-}
-
 function stringOrUndefined(value: unknown): string | undefined {
   if (typeof value === "string") {
     return value;
@@ -569,4 +759,10 @@ function stringOrUndefined(value: unknown): string | undefined {
 
 function arrayOrEmpty(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value) ? value as Array<Record<string, unknown>> : [];
+}
+
+function arrayOfNumbers(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.map((item) => Number(item)).filter((item) => Number.isFinite(item))
+    : [];
 }

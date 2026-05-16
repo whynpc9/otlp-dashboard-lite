@@ -135,7 +135,7 @@ POST http://localhost:4318/v1/logs
 POST http://localhost:4318/v1/metrics
 ```
 
-`/v1/metrics` supports lightweight OTLP JSON gauge/sum/histogram/summary point normalization and basic protobuf gauge/sum point normalization.
+`/v1/metrics` supports OTLP JSON and protobuf gauge, sum, histogram, exponential histogram, and summary normalization. Metric series preserve temporality, monotonicity, exemplars, and lightweight distribution metadata for dashboard inspection.
 
 The gRPC receiver supports unary `TraceService.Export`, `LogsService.Export`, and `MetricsService.Export` and reuses the same protobuf normalizer.
 
@@ -164,7 +164,7 @@ The endpoint is `http://127.0.0.1:18889/mcp`.
 
 ## Proto generation
 
-Official OTLP TypeScript bindings are generated with Buf:
+Official OTLP JavaScript and TypeScript declaration bindings are generated with Buf and used by the protobuf ingest path:
 
 ```bash
 pnpm --filter @devdash/otel-proto generate
@@ -172,8 +172,16 @@ pnpm --filter @devdash/otel-proto generate
 
 Generated files live in `packages/otel-proto/generated`.
 
+## Release dry run
+
+```bash
+pnpm release:dry-run
+```
+
+This runs install, typecheck, tests, build, and a CLI package pack dry-run into `dist-packages`.
+
 ## Examples
 
 - `examples/python-agent`: Python agent trace with GenAI and RAG metadata.
 - `examples/ts-agent`: TypeScript agent trace with LLM/MCP/RAG spans.
-- `examples/dotnet-webapi`: .NET WebAPI OpenTelemetry setup for OTLP/HTTP and OTLP/gRPC.
+- `examples/dotnet-webapi`: runnable .NET WebAPI OpenTelemetry smoke app for OTLP/HTTP and OTLP/gRPC.

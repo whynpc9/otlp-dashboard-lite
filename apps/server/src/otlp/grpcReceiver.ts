@@ -13,13 +13,24 @@ export async function startOtlpGrpcReceiver(input: {
   port: number;
   store: TelemetryStore;
   retention: RetentionPolicy;
+  maxConcurrentIngest?: number | undefined;
 }) {
   const server = new Server();
+  let inFlight = 0;
   for (const service of services) {
     server.register(
       service.path,
       (call: ServerUnaryCall<Buffer, Buffer>, callback: sendUnaryData<Buffer>) => {
+        inFlight += 1;
         try {
+          if (inFlight > (input.maxConcurrentIngest ?? 4)) {
+            callback({
+              name: "ResourceExhausted",
+              message: "OTLP ingest is busy",
+              code: status.RESOURCE_EXHAUSTED
+            });
+            return;
+          }
           const batch = normalizeOtlpBatch({
             signal: service.signal,
             protocol: "http/protobuf",
@@ -36,6 +47,8 @@ export async function startOtlpGrpcReceiver(input: {
             message: error instanceof Error ? error.message : "Invalid OTLP request",
             code: status.INVALID_ARGUMENT
           });
+        } finally {
+          inFlight -= 1;
         }
       },
       (response) => response,

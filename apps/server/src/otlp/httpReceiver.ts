@@ -5,7 +5,12 @@ import type { OtlpProtocol, RetentionPolicy, TelemetrySignal, TelemetryStore } f
 
 type RawBody = Buffer;
 
-export function registerOtlpRoutes(app: FastifyInstance, store: TelemetryStore, retention: RetentionPolicy = {}) {
+interface OtlpRouteOptions extends RetentionPolicy {
+  maxConcurrentIngest?: number | undefined;
+}
+
+export function registerOtlpRoutes(app: FastifyInstance, store: TelemetryStore, options: OtlpRouteOptions = {}) {
+  let inFlight = 0;
   app.addContentTypeParser("application/x-protobuf", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
   });
@@ -13,18 +18,43 @@ export function registerOtlpRoutes(app: FastifyInstance, store: TelemetryStore, 
     done(null, body);
   });
 
-  app.post("/v1/traces", async (request, reply) => handleOtlp(request, reply, store, retention, "traces"));
-  app.post("/v1/logs", async (request, reply) => handleOtlp(request, reply, store, retention, "logs"));
-  app.post("/v1/metrics", async (request, reply) => handleOtlp(request, reply, store, retention, "metrics"));
+  app.post("/v1/traces", async (request, reply) => {
+    inFlight += 1;
+    try {
+      return await handleOtlp(request, reply, store, options, "traces", inFlight);
+    } finally {
+      inFlight -= 1;
+    }
+  });
+  app.post("/v1/logs", async (request, reply) => {
+    inFlight += 1;
+    try {
+      return await handleOtlp(request, reply, store, options, "logs", inFlight);
+    } finally {
+      inFlight -= 1;
+    }
+  });
+  app.post("/v1/metrics", async (request, reply) => {
+    inFlight += 1;
+    try {
+      return await handleOtlp(request, reply, store, options, "metrics", inFlight);
+    } finally {
+      inFlight -= 1;
+    }
+  });
 }
 
 async function handleOtlp(
   request: FastifyRequest,
   reply: FastifyReply,
   store: TelemetryStore,
-  retention: RetentionPolicy,
-  signal: TelemetrySignal
+  options: OtlpRouteOptions,
+  signal: TelemetrySignal,
+  inFlight: number
 ) {
+  if (inFlight > (options.maxConcurrentIngest ?? 4)) {
+    return reply.code(503).header("retry-after", "1").send({ error: "OTLP ingest is busy" });
+  }
   const contentType = String(request.headers["content-type"] ?? "application/json").split(";")[0]!.trim().toLowerCase();
   const contentEncoding = String(request.headers["content-encoding"] ?? "").toLowerCase() || undefined;
   const protocol = protocolFromContentType(contentType);
@@ -46,7 +76,7 @@ async function handleOtlp(
       parsed
     });
     store.ingest(batch);
-    store.enforceRetention(retention);
+    store.enforceRetention(options);
 
     if (protocol === "http/protobuf") {
       return reply.header("content-type", "application/x-protobuf").send(Buffer.alloc(0));

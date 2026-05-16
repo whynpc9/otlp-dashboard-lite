@@ -75,6 +75,7 @@ export interface NormalizedMetricPoint {
   attributesHash: string;
   attributes: AttributeMap;
   exemplars: Array<Record<string, unknown>>;
+  distribution?: Record<string, unknown> | undefined;
   batchId: string;
 }
 
@@ -98,6 +99,8 @@ export interface MetricSeriesPoint {
   min?: number | undefined;
   max?: number | undefined;
   attributes: AttributeMap;
+  exemplars: Array<Record<string, unknown>>;
+  distribution?: Record<string, unknown> | undefined;
 }
 
 export interface TraceSummary {
@@ -152,6 +155,12 @@ export interface GenAiTraceSummary {
     toolName?: string | undefined;
     inputTokens?: number | undefined;
     outputTokens?: number | undefined;
+  }>;
+  conversation: Array<{
+    spanId: string;
+    role: "system" | "user" | "assistant" | "tool";
+    name?: string | undefined;
+    contentPreview: string;
   }>;
   rag: {
     retrievalSpanCount: number;

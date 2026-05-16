@@ -22,7 +22,7 @@ import {
   Sparkles,
   Sun
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getHealth, getMetricSeries, getTrace, listLogs, listMetrics, listResources, listTraces, type LogRecord, type MetricDescriptor, type MetricSeriesPoint, type Span, type TraceDetail, type TraceSummary } from "./api.js";
 
 type PageKey = "Traces" | "Logs" | "Metrics" | "GenAI" | "Resources" | "Settings";
@@ -570,18 +570,20 @@ function SettingsPage({ health }: { health: import("./api.js").Health | undefine
 }
 
 function TraceTable({ traces, selectedTraceId, onSelect, loading }: { traces: TraceSummary[]; selectedTraceId: string; onSelect(traceId: string): void; loading: boolean }) {
+  const virtual = useVirtualRows(traces, 48);
   if (traces.length === 0) {
     return <EmptyState scope={loading ? "loading" : "traces"} />;
   }
   return (
-    <div className="table trace-table">
+    <div className="table trace-table" ref={virtual.ref}>
       <div className="table-row table-head">
         <span>Root span</span>
         <span>Service</span>
         <span>Duration</span>
         <span>Status</span>
       </div>
-      {traces.map((trace) => (
+      <div className="virtual-spacer" style={{ height: virtual.top }} />
+      {virtual.rows.map(({ item: trace }) => (
         <button
           className={trace.traceId === selectedTraceId ? "table-row active" : "table-row"}
           key={trace.traceId}
@@ -596,6 +598,7 @@ function TraceTable({ traces, selectedTraceId, onSelect, loading }: { traces: Tr
           <span className={trace.errorCount ? "status-error" : "status-ok"}>{trace.errorCount ? `${trace.errorCount} errors` : "ok"}</span>
         </button>
       ))}
+      <div className="virtual-spacer" style={{ height: virtual.bottom }} />
     </div>
   );
 }
@@ -678,13 +681,15 @@ function SpanInspector({ spans, selectedSpanId }: { spans: Span[]; selectedSpanI
 }
 
 function LogTable({ logs, compact = false }: { logs: LogRecord[]; compact?: boolean }) {
+  const items = compact ? logs.slice(0, 8) : logs;
+  const virtual = useVirtualRows(items, 40);
   if (logs.length === 0) {
     return <EmptyState scope="logs" compact={compact} />;
   }
-  const rows = compact ? logs.slice(0, 8) : logs;
   return (
-    <div className="log-list">
-      {rows.map((log) => (
+    <div className="log-list" ref={virtual.ref}>
+      <div className="virtual-spacer" style={{ height: virtual.top }} />
+      {virtual.rows.map(({ item: log }) => (
         <div className="log-row" key={log.id}>
           <span className={severityClass(log.severityText)}>{log.severityText ?? "INFO"}</span>
           <strong>{log.serviceName}</strong>
@@ -692,25 +697,28 @@ function LogTable({ logs, compact = false }: { logs: LogRecord[]; compact?: bool
           <code>{log.traceId ? shortId(log.traceId) : "no-trace"}</code>
         </div>
       ))}
+      <div className="virtual-spacer" style={{ height: virtual.bottom }} />
     </div>
   );
 }
 
 function MetricsView({ metrics, selectedMetricName, onSelect, series, loading }: { metrics: MetricDescriptor[]; selectedMetricName: string; onSelect(metricName: string): void; series: MetricSeriesPoint[]; loading: boolean }) {
   const selected = metrics.find((metric) => metric.metricName === selectedMetricName);
+  const virtual = useVirtualRows(metrics, 54);
   return (
     <section className="metrics-grid">
       <div className="panel metrics-list-panel">
         <PanelHeader icon={Gauge} title="Metric instruments" meta={`${metrics.length} metrics`} />
         {metrics.length ? (
-          <div className="table metrics-table">
+          <div className="table metrics-table" ref={virtual.ref}>
             <div className="metric-row metric-head">
               <span>Name</span>
               <span>Type</span>
               <span>Points</span>
               <span>Attrs</span>
             </div>
-            {metrics.map((metric) => (
+            <div className="virtual-spacer" style={{ height: virtual.top }} />
+            {virtual.rows.map(({ item: metric }) => (
               <button className={metric.metricName === selectedMetricName ? "metric-row active" : "metric-row"} key={`${metric.serviceName}-${metric.meterName}-${metric.metricName}`} onClick={() => onSelect(metric.metricName)}>
                 <span>
                   <strong>{metric.metricName}</strong>
@@ -721,6 +729,7 @@ function MetricsView({ metrics, selectedMetricName, onSelect, series, loading }:
                 <span>{metric.attributeSets}</span>
               </button>
             ))}
+            <div className="virtual-spacer" style={{ height: virtual.bottom }} />
           </div>
         ) : (
           <EmptyState scope={loading ? "loading" : "metrics"} />
@@ -738,6 +747,7 @@ function MetricChart({ series }: { series: MetricSeriesPoint[] }) {
   if (!series.length) {
     return <EmptyState scope="metrics" compact />;
   }
+  const latestPoint = series[series.length - 1];
   const values = series.map((point) => point.value ?? point.sum ?? point.count ?? 0);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -759,6 +769,30 @@ function MetricChart({ series }: { series: MetricSeriesPoint[] }) {
         <strong>latest {values[values.length - 1]?.toFixed(2)}</strong>
         <span>max {max.toFixed(2)}</span>
       </div>
+      {latestPoint ? <MetricPointDetails point={latestPoint} /> : null}
+    </div>
+  );
+}
+
+function MetricPointDetails({ point }: { point: MetricSeriesPoint }) {
+  const exemplarCount = point.exemplars.length;
+  if (!point.distribution && exemplarCount === 0) {
+    return null;
+  }
+  return (
+    <div className="metric-point-details">
+      {point.distribution ? (
+        <div>
+          <strong>{String(point.distribution.kind ?? "distribution")}</strong>
+          <pre>{JSON.stringify(point.distribution, null, 2)}</pre>
+        </div>
+      ) : null}
+      {exemplarCount ? (
+        <div>
+          <strong>{exemplarCount} exemplars</strong>
+          <pre>{JSON.stringify(point.exemplars.slice(0, 5), null, 2)}</pre>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -805,6 +839,16 @@ function GenAiSummary({ trace }: { trace: TraceDetail }) {
           </div>
         ))}
       </div>
+      {trace.genAi.conversation.length ? (
+        <div className="conversation-list">
+          {trace.genAi.conversation.map((turn, index) => (
+            <div className={`conversation-turn ${turn.role}`} key={`${turn.spanId}-${turn.role}-${index}`}>
+              <span>{turn.name ?? turn.role}</span>
+              <p>{turn.contentPreview}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {trace.genAi.rag.documents.length ? (
         <div className="rag-docs">
           {trace.genAi.rag.documents.map((document, index) => (
@@ -858,6 +902,44 @@ function emptyContent(scope: string): { icon: typeof Radio; message: React.React
     default:
       return { icon: Radio, message: <>Waiting for OTLP telemetry on <code>localhost:4318</code>.</> };
   }
+}
+
+function useVirtualRows<T>(items: T[], rowHeight: number) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [range, setRange] = useState({ start: 0, end: Math.min(items.length, 80) });
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return;
+    }
+    const update = () => {
+      const headerRows = element.querySelectorAll(".table-head, .metric-head").length;
+      const headerHeight = headerRows ? 34 : 0;
+      const top = Math.max(0, element.scrollTop - headerHeight);
+      const visible = Math.ceil(element.clientHeight / rowHeight);
+      const start = Math.max(0, Math.floor(top / rowHeight) - 8);
+      const end = Math.min(items.length, start + visible + 20);
+      setRange((current) => current.start === start && current.end === end ? current : { start, end });
+    };
+    update();
+    element.addEventListener("scroll", update, { passive: true });
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => {
+      element.removeEventListener("scroll", update);
+      observer.disconnect();
+    };
+  }, [items.length, rowHeight]);
+
+  const end = Math.min(range.end, items.length);
+  const start = Math.min(range.start, end);
+  return {
+    ref,
+    rows: items.slice(start, end).map((item, offset) => ({ item, index: start + offset })),
+    top: start * rowHeight,
+    bottom: Math.max(0, (items.length - end) * rowHeight)
+  };
 }
 
 function formatDuration(nano: number) {

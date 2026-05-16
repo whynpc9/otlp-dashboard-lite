@@ -26,6 +26,12 @@ importers:
 
   apps/server:
     dependencies:
+      '@bufbuild/protobuf':
+        specifier: ^2.12.0
+        version: 2.12.0
+      '@devdash/otel-proto':
+        specifier: workspace:*
+        version: link:../../packages/otel-proto
       '@fastify/cors':
         specifier: ^11.0.1
         version: 11.2.0

@@ -86,6 +86,12 @@ export interface TraceDetail extends TraceSummary {
       inputTokens?: number | undefined;
       outputTokens?: number | undefined;
     }>;
+    conversation: Array<{
+      spanId: string;
+      role: "system" | "user" | "assistant" | "tool";
+      name?: string | undefined;
+      contentPreview: string;
+    }>;
     rag: {
       retrievalSpanCount: number;
       retrievedDocCount: number;
@@ -132,6 +138,8 @@ export interface MetricSeriesPoint {
   sum?: number | undefined;
   min?: number | undefined;
   max?: number | undefined;
+  exemplars: Array<Record<string, unknown>>;
+  distribution?: Record<string, unknown> | undefined;
   attributes: Record<string, unknown>;
 }
 

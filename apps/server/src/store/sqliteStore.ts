@@ -76,8 +76,8 @@ export class SqliteTelemetryStore implements TelemetryStore {
         id, service_name, meter_name, metric_name, metric_type, description, unit,
         temporality, is_monotonic, start_time_unix_nano, time_unix_nano,
         value_real, count_value, sum_value, min_value, max_value,
-        attributes_hash, attributes_json, exemplars_json, batch_id
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        attributes_hash, attributes_json, exemplars_json, distribution_json, batch_id
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.upsertSummaryStmt = this.db.prepare(`
       insert into trace_summaries (
@@ -331,7 +331,9 @@ export class SqliteTelemetryStore implements TelemetryStore {
         sum: point.sum,
         min: point.min,
         max: point.max,
-        attributes: point.attributes
+        attributes: point.attributes,
+        exemplars: point.exemplars,
+        distribution: point.distribution
       }));
   }
 
@@ -509,6 +511,7 @@ export class SqliteTelemetryStore implements TelemetryStore {
         attributes_hash text not null,
         attributes_json text not null,
         exemplars_json text not null,
+        distribution_json text,
         batch_id text not null
       );
       create index if not exists idx_metric_name_time on metric_points(metric_name, time_unix_nano);
@@ -534,6 +537,14 @@ export class SqliteTelemetryStore implements TelemetryStore {
       create index if not exists idx_trace_summaries_duration on trace_summaries(duration_nano);
       create index if not exists idx_trace_summaries_error on trace_summaries(error_count);
     `);
+    this.addColumnIfMissing("metric_points", "distribution_json", "text");
+  }
+
+  private addColumnIfMissing(table: string, column: string, definition: string) {
+    const rows = this.db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>;
+    if (!rows.some((row) => row.name === column)) {
+      this.db.exec(`alter table ${table} add column ${column} ${definition}`);
+    }
   }
 
   private insertBatch(raw: RawOtlpBatch) {
@@ -613,6 +624,7 @@ export class SqliteTelemetryStore implements TelemetryStore {
       metric.attributesHash,
       JSON.stringify(metric.attributes),
       JSON.stringify(metric.exemplars),
+      metric.distribution === undefined ? null : JSON.stringify(metric.distribution),
       metric.batchId
     );
   }
@@ -792,6 +804,7 @@ interface MetricPointRow {
   attributes_hash: string;
   attributes_json: string;
   exemplars_json: string;
+  distribution_json: string | null;
   batch_id: string;
 }
 
@@ -887,6 +900,7 @@ function metricPointFromRow(row: MetricPointRow): NormalizedMetricPoint {
     attributesHash: row.attributes_hash,
     attributes: parseJson(row.attributes_json, {}),
     exemplars: parseJson(row.exemplars_json, []),
+    distribution: row.distribution_json ? parseJson(row.distribution_json, undefined) : undefined,
     batchId: row.batch_id
   };
 }

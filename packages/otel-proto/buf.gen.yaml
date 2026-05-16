@@ -3,5 +3,6 @@ plugins:
   - local: protoc-gen-es
     out: generated
     opt:
-      - target=ts
+      - target=js+dts
+      - import_extension=js
     include_imports: true

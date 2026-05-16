@@ -244,7 +244,9 @@ export class MemoryTelemetryStore implements TelemetryStore {
         sum: point.sum,
         min: point.min,
         max: point.max,
-        attributes: point.attributes
+        attributes: point.attributes,
+        exemplars: point.exemplars,
+        distribution: point.distribution
       }));
   }
 
@@ -435,6 +437,10 @@ export function summarizeGenAi(spans: NormalizedSpan[]): GenAiTraceSummary {
         inputTokens: span.inputTokens,
         outputTokens: span.outputTokens
       })),
+    conversation: genAiSpans
+      .sort((a, b) => Number(a.startTimeUnixNano) - Number(b.startTimeUnixNano))
+      .flatMap((span) => span.conversationTurns)
+      .slice(0, 80),
     rag: {
       retrievalSpanCount: genAiSpans.filter((span) => span.kind === "retrieval").length,
       retrievedDocCount: genAiSpans.reduce((sum, span) => sum + (span.retrievedDocCount ?? span.retrievedDocuments.length), 0),
@@ -501,6 +507,7 @@ function classifyGenAiSpan(span: NormalizedSpan) {
     toolName: readString(attrs, "tool.name") ?? readString(attrs, "mcp.tool.name") ?? readString(attrs, "function.name"),
     retrievedDocCount: readNumber(attrs, "retrieval.documents.count") ?? readNumber(attrs, "rag.retrieved_doc_count") ?? readNumber(attrs, "retrieved_document_count"),
     retrievedDocuments: extractRagDocuments(attrs),
+    conversationTurns: extractConversationTurns(span),
     redactedContentKeys: Object.keys(attrs).filter((key) => typeof attrs[key] === "string" && String(attrs[key]).includes("[redacted"))
   };
 }
@@ -583,6 +590,101 @@ function normalizeRagDocument(value: unknown) {
     score: readNumber(record, "score") ?? readNumber(record, "document.score"),
     contentPreview: content ? truncate(content, 220) : undefined
   };
+}
+
+function extractConversationTurns(span: NormalizedSpan) {
+  const attrs = span.attributes;
+  const turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; name?: string | undefined; contentPreview: string }> = [];
+  addTurn(turns, span, "system", readFirstString(attrs, ["gen_ai.system.message", "llm.system", "system"]));
+  addTurn(turns, span, "user", readFirstString(attrs, [
+    "gen_ai.prompt",
+    "gen_ai.input",
+    "llm.prompt",
+    "input.value",
+    "input",
+    "openinference.input.value"
+  ]));
+  addTurn(turns, span, "assistant", readFirstString(attrs, [
+    "gen_ai.completion",
+    "gen_ai.output",
+    "llm.completion",
+    "output.value",
+    "output",
+    "openinference.output.value"
+  ]));
+  addTurn(turns, span, "tool", readFirstString(attrs, [
+    "tool.output",
+    "tool.result",
+    "mcp.tool.result",
+    "function.result"
+  ]), readString(attrs, "tool.name") ?? readString(attrs, "mcp.tool.name") ?? readString(attrs, "function.name"));
+
+  for (const event of span.events) {
+    const role = conversationRole(readString(event, "role") ?? readString(event, "message.role")) ?? roleFromEventName(readString(event, "name"));
+    const content = readFirstString(event, ["content", "message.content", "body", "text"]);
+    if (role && content) {
+      addTurn(turns, span, role, content, readString(event, "name"));
+    }
+  }
+
+  return turns;
+}
+
+function addTurn(
+  turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; name?: string | undefined; contentPreview: string }>,
+  span: NormalizedSpan,
+  role: "system" | "user" | "assistant" | "tool",
+  value?: string,
+  name?: string
+) {
+  if (!value) {
+    return;
+  }
+  turns.push({
+    spanId: span.spanId,
+    role,
+    name,
+    contentPreview: truncate(value, 600)
+  });
+}
+
+function readFirstString(attrs: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = readContentString(attrs, key);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readContentString(attrs: Record<string, unknown>, key: string): string | undefined {
+  const value = attrs[key];
+  if (typeof value === "string") {
+    return value;
+  }
+  if (isRecord(value) && value.redacted === true) {
+    const bytes = typeof value.bytes === "number" ? `${value.bytes} bytes` : "content";
+    const hash = typeof value.sha256 === "string" ? `, hash ${value.sha256}` : "";
+    return `[redacted ${bytes}${hash}]`;
+  }
+  return undefined;
+}
+
+function conversationRole(value: string | undefined): "system" | "user" | "assistant" | "tool" | undefined {
+  if (value === "system" || value === "user" || value === "assistant" || value === "tool") {
+    return value;
+  }
+  return undefined;
+}
+
+function roleFromEventName(name: string | undefined): "system" | "user" | "assistant" | "tool" | undefined {
+  const lower = name?.toLowerCase() ?? "";
+  if (lower.includes("system")) return "system";
+  if (lower.includes("user") || lower.includes("prompt")) return "user";
+  if (lower.includes("assistant") || lower.includes("completion") || lower.includes("response")) return "assistant";
+  if (lower.includes("tool")) return "tool";
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

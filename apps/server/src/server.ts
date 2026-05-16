@@ -35,7 +35,8 @@ export async function startServers(config: ServerConfig): Promise<RunningServers
     maxTraces: config.maxTraces,
     maxLogs: config.maxLogs,
     maxMetrics: config.maxMetrics,
-    maxDbSizeBytes: config.maxDbSizeBytes
+    maxDbSizeBytes: config.maxDbSizeBytes,
+    maxConcurrentIngest: config.maxConcurrentIngest
   });
 
   const webDistDir = resolveWebDistDir(config.webDistDir);
@@ -69,7 +70,8 @@ export async function startServers(config: ServerConfig): Promise<RunningServers
       maxLogs: config.maxLogs,
       maxMetrics: config.maxMetrics,
       maxDbSizeBytes: config.maxDbSizeBytes
-    }
+    },
+    maxConcurrentIngest: config.maxConcurrentIngest
   });
 
   return {

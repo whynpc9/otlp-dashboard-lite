@@ -14,6 +14,7 @@ export interface ServerConfig {
   maxLogs: number;
   maxBatches: number;
   maxMetricAttributeSets?: number | undefined;
+  maxConcurrentIngest?: number | undefined;
 }
 
 export function readConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -33,6 +34,7 @@ export function readConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     maxMetrics: Number(process.env.DEVDASH_MAX_METRICS ?? 100_000),
     maxBatches: Number(process.env.DEVDASH_MAX_BATCHES ?? 1_000),
     maxMetricAttributeSets: Number(process.env.DEVDASH_MAX_METRIC_ATTRIBUTE_SETS ?? 1_000),
+    maxConcurrentIngest: Number(process.env.DEVDASH_MAX_CONCURRENT_INGEST ?? 4),
     ...overrides
   };
 }

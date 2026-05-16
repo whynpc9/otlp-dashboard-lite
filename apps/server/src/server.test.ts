@@ -233,6 +233,34 @@ describe("OTLP HTTP receiver", () => {
     expect(series.series.map((point) => point.value)).toEqual([12.5, 18.25]);
   });
 
+  it("keeps histogram distribution and exemplars in metric series", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    const dashboardUrl = addressUrl(running.dashboard);
+    await postJson(`${addressUrl(running.otlp)}/v1/metrics`, histogramMetricPayload());
+
+    const series = await fetchJson<{ series: Array<{ count: number; sum: number; exemplars: unknown[]; distribution: { kind: string; bucketCounts: number[] } }> }>(
+      `${dashboardUrl}/api/metrics/http.server.request.duration/series`
+    );
+    expect(series.series[0]).toMatchObject({
+      count: 3,
+      sum: 41,
+      distribution: { kind: "explicit", bucketCounts: [1, 2, 0] }
+    });
+    expect(series.series[0]?.exemplars).toHaveLength(1);
+  });
+
   it("drops metric points beyond the attribute cardinality limit", async () => {
     running = await startServers({
       host: "127.0.0.1",
@@ -397,6 +425,37 @@ describe("OTLP HTTP receiver", () => {
       score: 0.93,
       contentPreview: "Refunds are available within thirty days for unused orders."
     });
+  });
+
+  it("reconstructs GenAI conversation turns", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    const dashboardUrl = addressUrl(running.dashboard);
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      extraAttributes: [
+        { key: "gen_ai.prompt", value: { stringValue: "What changed in the checkout service?" } },
+        { key: "gen_ai.completion", value: { stringValue: "The checkout service emitted correlated traces and logs." } },
+        { key: "tool.name", value: { stringValue: "list_recent_errors" } },
+        { key: "tool.output", value: { stringValue: "No recent errors." } }
+      ]
+    }));
+
+    const detail = await fetchJson<{ trace: { genAi: { conversation: Array<{ role: string; contentPreview: string }> } } }>(
+      `${dashboardUrl}/api/traces/11111111111111111111111111111111`
+    );
+    expect(detail.trace.genAi.conversation.map((turn) => turn.role)).toEqual(["user", "assistant", "tool"]);
+    expect(detail.trace.genAi.conversation[0]?.contentPreview).toContain("[redacted");
   });
 
   it("paginates and filters traces, logs, and metric series by time range", async () => {
@@ -608,6 +667,51 @@ function metricPayload(route = "/orders") {
                       timeUnixNano: "1715840000600000000",
                       asDouble: 18.25,
                       attributes: [{ key: "route", value: { stringValue: route } }]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function histogramMetricPayload() {
+  return {
+    resourceMetrics: [
+      {
+        resource: {
+          attributes: [{ key: "service.name", value: { stringValue: "checkout-api" } }]
+        },
+        scopeMetrics: [
+          {
+            scope: { name: "demo-meter" },
+            metrics: [
+              {
+                name: "http.server.request.duration",
+                unit: "ms",
+                histogram: {
+                  aggregationTemporality: 2,
+                  dataPoints: [
+                    {
+                      timeUnixNano: "1715840000700000000",
+                      count: "3",
+                      sum: 41,
+                      min: 8,
+                      max: 22,
+                      explicitBounds: [10, 20],
+                      bucketCounts: ["1", "2", "0"],
+                      exemplars: [
+                        {
+                          timeUnixNano: "1715840000690000000",
+                          asDouble: 22,
+                          traceId: "11111111111111111111111111111111",
+                          spanId: "2222222222222222"
+                        }
+                      ]
                     }
                   ]
                 }

@@ -101,6 +101,7 @@ function parseServeConfig(args: string[]): ServerConfig {
   assign(overrides, "maxTraces", numberOption(args, "--max-traces"));
   assign(overrides, "maxBatches", numberOption(args, "--max-batches"));
   assign(overrides, "maxMetricAttributeSets", numberOption(args, "--max-metric-attribute-sets"));
+  assign(overrides, "maxConcurrentIngest", numberOption(args, "--max-concurrent-ingest"));
   assign(overrides, "retentionMs", durationOption(args, "--retention"));
   assign(overrides, "maxDbSizeBytes", bytesOption(args, "--max-db-size"));
   assign(overrides, "webDistDir", readOption(args, "--web-dist"));
