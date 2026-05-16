@@ -34,7 +34,8 @@ export async function startServers(config: ServerConfig): Promise<RunningServers
     maxAgeMs: config.retentionMs,
     maxTraces: config.maxTraces,
     maxLogs: config.maxLogs,
-    maxMetrics: config.maxMetrics
+    maxMetrics: config.maxMetrics,
+    maxDbSizeBytes: config.maxDbSizeBytes
   });
 
   const webDistDir = resolveWebDistDir(config.webDistDir);
@@ -66,7 +67,8 @@ export async function startServers(config: ServerConfig): Promise<RunningServers
       maxAgeMs: config.retentionMs,
       maxTraces: config.maxTraces,
       maxLogs: config.maxLogs,
-      maxMetrics: config.maxMetrics
+      maxMetrics: config.maxMetrics,
+      maxDbSizeBytes: config.maxDbSizeBytes
     }
   });
 
@@ -85,14 +87,17 @@ export async function startServers(config: ServerConfig): Promise<RunningServers
 
 function createStore(config: ServerConfig): TelemetryStore {
   if (config.storage === "sqlite") {
-    return new SqliteTelemetryStore(path.resolve(config.dbPath));
+    return new SqliteTelemetryStore(path.resolve(config.dbPath), {
+      maxMetricAttributeSets: config.maxMetricAttributeSets ?? 1_000
+    });
   }
 
   return new MemoryTelemetryStore({
     maxSpans: config.maxSpans,
     maxLogs: config.maxLogs,
     maxBatches: config.maxBatches,
-    maxMetrics: config.maxMetrics
+    maxMetrics: config.maxMetrics,
+    maxMetricAttributeSets: config.maxMetricAttributeSets ?? 1_000
   });
 }
 

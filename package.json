@@ -9,7 +9,8 @@
     "serve": "pnpm --filter @devdash/cli start -- serve",
     "build": "pnpm -r build",
     "check": "pnpm -r check",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "proto:generate": "pnpm --filter @devdash/otel-proto generate"
   },
   "engines": {
     "node": ">=22"

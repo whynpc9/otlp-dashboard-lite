@@ -6,6 +6,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/cli/package.json packages/cli/package.json
+COPY packages/otel-proto/package.json packages/otel-proto/package.json
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build

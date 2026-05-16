@@ -805,6 +805,17 @@ function GenAiSummary({ trace }: { trace: TraceDetail }) {
           </div>
         ))}
       </div>
+      {trace.genAi.rag.documents.length ? (
+        <div className="rag-docs">
+          {trace.genAi.rag.documents.map((document, index) => (
+            <div className="rag-doc" key={`${document.spanId}-${document.id ?? index}`}>
+              <strong>{document.title ?? document.id ?? `Document ${index + 1}`}</strong>
+              <span>{document.score === undefined ? "score n/a" : `score ${document.score.toFixed(3)}`}</span>
+              {document.contentPreview ? <p>{document.contentPreview}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

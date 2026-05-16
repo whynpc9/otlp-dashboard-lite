@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseDurationMs, readConfig, type ServerConfig } from "@devdash/server/config";
+import { parseBytes, parseDurationMs, readConfig, type ServerConfig } from "@devdash/server/config";
 import { startServers } from "@devdash/server/server";
 
 const argv = process.argv.slice(2);
@@ -62,7 +62,8 @@ if (command === "serve") {
       maxAgeMs: retention ? parseDurationMs(retention) : undefined,
       maxTraces: numberOption(args, "--max-traces"),
       maxLogs: numberOption(args, "--max-logs"),
-      maxMetrics: numberOption(args, "--max-metrics")
+      maxMetrics: numberOption(args, "--max-metrics"),
+      maxDbSizeBytes: bytesOption(args, "--max-db-size")
     })
   });
   console.log(await response.text());
@@ -70,13 +71,19 @@ if (command === "serve") {
   const dashboardUrl = readOption(args, "--dashboard-url") ?? "http://127.0.0.1:18888";
   const { runMcpServer } = await import("@devdash/server/mcp");
   await runMcpServer({ dashboardUrl });
+} else if (command === "mcp-http") {
+  const dashboardUrl = readOption(args, "--dashboard-url") ?? "http://127.0.0.1:18888";
+  const host = readOption(args, "--host") ?? "127.0.0.1";
+  const port = numberOption(args, "--port") ?? 18889;
+  const { runMcpHttpServer } = await import("@devdash/server/mcp");
+  await runMcpHttpServer({ dashboardUrl, host, port });
 } else if (command === "open") {
   const baseUrl = readOption(args, "--dashboard-url") ?? "http://127.0.0.1:18888";
   const open = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   await import("node:child_process").then(({ execFile }) => execFile(open, [baseUrl]));
 } else {
   console.error(`Unknown command: ${command}`);
-  console.error("Usage: devdash serve|clear|export|import|retention|mcp|open");
+  console.error("Usage: devdash serve|clear|export|import|retention|mcp|mcp-http|open");
   process.exit(1);
 }
 
@@ -93,7 +100,9 @@ function parseServeConfig(args: string[]): ServerConfig {
   assign(overrides, "maxMetrics", numberOption(args, "--max-metrics"));
   assign(overrides, "maxTraces", numberOption(args, "--max-traces"));
   assign(overrides, "maxBatches", numberOption(args, "--max-batches"));
+  assign(overrides, "maxMetricAttributeSets", numberOption(args, "--max-metric-attribute-sets"));
   assign(overrides, "retentionMs", durationOption(args, "--retention"));
+  assign(overrides, "maxDbSizeBytes", bytesOption(args, "--max-db-size"));
   assign(overrides, "webDistDir", readOption(args, "--web-dist"));
   return readConfig(overrides);
 }
@@ -101,6 +110,11 @@ function parseServeConfig(args: string[]): ServerConfig {
 function durationOption(args: string[], name: string): number | undefined {
   const value = readOption(args, name);
   return value ? parseDurationMs(value) : undefined;
+}
+
+function bytesOption(args: string[], name: string): number | undefined {
+  const value = readOption(args, name);
+  return value ? parseBytes(value) : undefined;
 }
 
 function dbPathOption(args: string[]): string | undefined {

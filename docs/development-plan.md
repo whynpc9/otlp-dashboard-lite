@@ -907,24 +907,27 @@ v1 完成定义：
 截至当前代码版本，已落地：
 
 - pnpm workspace：`apps/server`、`apps/web`、`packages/cli`。
+- Buf generation workflow：`packages/otel-proto` 可生成官方 OTLP TypeScript bindings。
 - OTLP/HTTP：`/v1/traces`、`/v1/logs`、`/v1/metrics`，支持 JSON、protobuf、gzip。
 - OTLP/gRPC：`TraceService.Export`、`LogsService.Export`、`MetricsService.Export` unary 接收。
 - Memory store：spans/logs/metrics/batches ring buffer。
-- SQLite store：raw batches、spans、logs、metric_points、trace_summaries，WAL，重启持久化。
-- API：resources、traces、trace detail、logs、metrics、metric series、GenAI trace、export/import、retention、clear。
-- UI：Traces、Logs、Metrics、GenAI summary/timeline 视图。
-- GenAI：多来源 span classifier、token/cost summary、tool/RAG counters、normalized-data redaction。
-- CLI：serve、clear、export、import、retention、open、mcp。
+- SQLite store：raw batches、spans、logs、metric_points、trace_summaries，WAL，重启持久化，DB size retention。
+- API：resources、traces、trace detail、logs、metrics、metric series、GenAI trace、export/import、retention、clear，支持 cursor/time range。
+- UI：Traces、Logs、Metrics、GenAI summary/timeline/RAG document 视图。
+- GenAI：多来源 span classifier、token/cost summary、tool/RAG counters、retrieved document extraction、normalized-data redaction。
+- Metrics protection：metric attribute set cardinality limit。
+- CLI：serve、clear、export、import、retention、open、mcp、mcp-http。
 - MCP stdio：resources/errors/traces/logs/GenAI/slow-operation tools。
+- MCP Streamable HTTP：`/mcp` endpoint 可供 IDE/plugin 集成。
 - Dockerfile：本地构建后暴露 `18888`、`4317`、`4318`。
-- 测试：HTTP JSON/protobuf/gzip、gRPC protobuf、SQLite persistence、metrics query、export/import、retention、redaction。
+- Examples：Python Agent、TypeScript Agent、.NET WebAPI 接入说明。
+- 测试：HTTP JSON/protobuf/gzip、gRPC protobuf、SQLite persistence、metrics query、export/import、retention、DB size retention、redaction、pagination/time range、RAG documents、metric cardinality。
 
 仍需后续强化：
 
-- 用 Buf + 官方 `opentelemetry-proto` 替换当前轻量 protobuf reader。
+- 将 ingest hot path 从当前轻量 protobuf reader 迁移到 `packages/otel-proto` 生成类型。
 - 完整 metrics histogram/exemplar 展示与更准确 temporality 处理。
-- Streamable HTTP MCP transport。
-- 更完整 RAG document inspection 与 Agent conversation reconstruction。
-- UI virtualization、backpressure、attribute cardinality protection、DB size retention。
+- 更完整 Agent conversation reconstruction。
+- UI virtualization、ingest backpressure。
 - `npx` 发布前的 package exports/bin 整理和 release workflow。
-- .NET/Python/TS 示例应用从 curl smoke 扩展成可运行项目。
+- .NET 示例从接入说明扩展成完整可运行项目。

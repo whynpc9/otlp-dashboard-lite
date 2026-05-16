@@ -158,6 +158,13 @@ export interface GenAiTraceSummary {
     retrievedDocCount: number;
     rerankSpanCount: number;
     embeddingSpanCount: number;
+    documents: Array<{
+      spanId: string;
+      id?: string | undefined;
+      title?: string | undefined;
+      score?: number | undefined;
+      contentPreview?: string | undefined;
+    }>;
   };
   longestStep?: {
     spanId: string;
@@ -203,9 +210,10 @@ export interface TelemetryStore {
     spans: number;
 	    logs: number;
 	    traces: number;
-	    metrics: number;
-	    storage: string;
+    metrics: number;
+    storage: string;
     dbPath?: string;
+    dbSizeBytes?: number;
   };
   close?(): void;
 }
@@ -215,6 +223,7 @@ export interface RetentionPolicy {
   maxTraces?: number | undefined;
   maxLogs?: number | undefined;
   maxMetrics?: number | undefined;
+  maxDbSizeBytes?: number | undefined;
 }
 
 export interface TraceListQuery {
@@ -222,6 +231,9 @@ export interface TraceListQuery {
   q?: string | undefined;
   hasError?: boolean | undefined;
   minDurationMs?: number | undefined;
+  fromUnixNano?: string | undefined;
+  toUnixNano?: string | undefined;
+  offset?: number | undefined;
   limit: number;
 }
 
@@ -231,12 +243,18 @@ export interface LogQuery {
   traceId?: string | undefined;
   spanId?: string | undefined;
   q?: string | undefined;
+  fromUnixNano?: string | undefined;
+  toUnixNano?: string | undefined;
+  offset?: number | undefined;
   limit: number;
 }
 
 export interface MetricQuery {
   service?: string | undefined;
   q?: string | undefined;
+  fromUnixNano?: string | undefined;
+  toUnixNano?: string | undefined;
+  offset?: number | undefined;
   limit: number;
 }
 
@@ -244,5 +262,8 @@ export interface MetricSeriesQuery {
   metricName: string;
   service?: string | undefined;
   attrs?: string | undefined;
+  fromUnixNano?: string | undefined;
+  toUnixNano?: string | undefined;
+  offset?: number | undefined;
   limit: number;
 }

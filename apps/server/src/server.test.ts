@@ -169,6 +169,43 @@ describe("OTLP HTTP receiver", () => {
     }
   });
 
+  it("enforces SQLite DB size retention by deleting oldest telemetry", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "devdash-sqlite-size-"));
+    const dbPath = join(dir, "devdash.db");
+    try {
+      running = await startServers({
+        host: "127.0.0.1",
+        dashboardPort: 0,
+        otlpHttpPort: 0,
+        otlpGrpcPort: 0,
+        storage: "sqlite",
+        dbPath,
+        maxBatches: 100,
+        maxLogs: 100,
+        maxSpans: 100,
+        maxMetrics: 100
+      });
+
+      const dashboardUrl = addressUrl(running.dashboard);
+      await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload());
+      await postJson(`${addressUrl(running.otlp)}/v1/logs`, logPayload());
+      await postJson(`${addressUrl(running.otlp)}/v1/metrics`, metricPayload());
+
+      const before = await fetchJson<{ dbSizeBytes: number; traces: number; logs: number; metrics: number }>(`${dashboardUrl}/api/health`);
+      expect(before.dbSizeBytes).toBeGreaterThan(0);
+      expect(before.traces + before.logs + before.metrics).toBeGreaterThan(0);
+
+      const retained = await postAndReadJson<{ deleted: number }>(`${dashboardUrl}/api/retention`, { maxDbSizeBytes: 1 });
+      expect(retained.deleted).toBeGreaterThan(0);
+      const after = await fetchJson<{ traces: number; logs: number; metrics: number }>(`${dashboardUrl}/api/health`);
+      expect(after.traces + after.logs + after.metrics).toBe(0);
+    } finally {
+      await running?.close();
+      running = undefined;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("ingests and queries JSON metrics", async () => {
     running = await startServers({
       host: "127.0.0.1",
@@ -194,6 +231,30 @@ describe("OTLP HTTP receiver", () => {
 
     const series = await fetchJson<{ series: Array<{ value: number }> }>(`${dashboardUrl}/api/metrics/http.server.duration/series`);
     expect(series.series.map((point) => point.value)).toEqual([12.5, 18.25]);
+  });
+
+  it("drops metric points beyond the attribute cardinality limit", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100,
+      maxMetricAttributeSets: 1
+    });
+
+    const dashboardUrl = addressUrl(running.dashboard);
+    await postJson(`${addressUrl(running.otlp)}/v1/metrics`, metricPayload("/orders"));
+    await postJson(`${addressUrl(running.otlp)}/v1/metrics`, metricPayload("/checkout"));
+
+    expect(running.store.stats().metrics).toBe(2);
+    const series = await fetchJson<{ series: Array<{ attributes: { route: string } }> }>(`${dashboardUrl}/api/metrics/http.server.duration/series`);
+    expect(series.series.map((point) => point.attributes.route)).toEqual(["/orders", "/orders"]);
   });
 
   it("exports, clears, and imports normalized telemetry", async () => {
@@ -300,6 +361,95 @@ describe("OTLP HTTP receiver", () => {
     expect(detail.trace.spans[0]?.attributes["gen_ai.prompt.0.content"]).toMatchObject({ redacted: true });
     expect(detail.trace.spans[0]?.attributes["db.connection_string"]).toBe("[redacted]");
     expect(detail.trace.logs[0]?.bodyText).toContain("[redacted]");
+  });
+
+  it("extracts RAG documents from retrieval span attributes", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    const dashboardUrl = addressUrl(running.dashboard);
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      name: "vector retrieval",
+      extraAttributes: [
+        { key: "retrieval.documents.0.id", value: { stringValue: "doc-1" } },
+        { key: "retrieval.documents.0.title", value: { stringValue: "Refund policy" } },
+        { key: "retrieval.documents.0.score", value: { doubleValue: 0.93 } },
+        { key: "retrieval.documents.0.content", value: { stringValue: "Refunds are available within thirty days for unused orders." } }
+      ]
+    }));
+
+    const detail = await fetchJson<{ trace: { genAi: { rag: { retrievedDocCount: number; documents: Array<{ title: string; score: number; contentPreview: string }> } } } }>(
+      `${dashboardUrl}/api/traces/11111111111111111111111111111111`
+    );
+    expect(detail.trace.genAi.rag.retrievedDocCount).toBe(1);
+    expect(detail.trace.genAi.rag.documents[0]).toMatchObject({
+      title: "Refund policy",
+      score: 0.93,
+      contentPreview: "Refunds are available within thirty days for unused orders."
+    });
+  });
+
+  it("paginates and filters traces, logs, and metric series by time range", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    const dashboardUrl = addressUrl(running.dashboard);
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      traceId: "11111111111111111111111111111111",
+      spanId: "2222222222222222",
+      name: "old trace",
+      startTimeUnixNano: "1715840000000000000",
+      endTimeUnixNano: "1715840000840000000"
+    }));
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      traceId: "33333333333333333333333333333333",
+      spanId: "4444444444444444",
+      name: "new trace",
+      startTimeUnixNano: "1715840001000000000",
+      endTimeUnixNano: "1715840001840000000"
+    }));
+    await postJson(`${addressUrl(running.otlp)}/v1/logs`, logPayload());
+    await postJson(`${addressUrl(running.otlp)}/v1/metrics`, metricPayload());
+
+    const firstPage = await fetchJson<{ traces: Array<{ traceId: string }>; nextCursor?: string }>(`${dashboardUrl}/api/traces?limit=1`);
+    expect(firstPage.traces.map((trace) => trace.traceId)).toEqual(["33333333333333333333333333333333"]);
+    expect(firstPage.nextCursor).toBe("1");
+
+    const secondPage = await fetchJson<{ traces: Array<{ traceId: string }>; nextCursor?: string }>(`${dashboardUrl}/api/traces?limit=1&cursor=${firstPage.nextCursor}`);
+    expect(secondPage.traces.map((trace) => trace.traceId)).toEqual(["11111111111111111111111111111111"]);
+    expect(secondPage.nextCursor).toBeUndefined();
+
+    const filteredTraces = await fetchJson<{ traces: Array<{ traceId: string }> }>(`${dashboardUrl}/api/traces?from=1715840000900`);
+    expect(filteredTraces.traces.map((trace) => trace.traceId)).toEqual(["33333333333333333333333333333333"]);
+
+    const filteredLogs = await fetchJson<{ logs: unknown[] }>(`${dashboardUrl}/api/logs?from=1715840000500`);
+    expect(filteredLogs.logs).toHaveLength(0);
+
+    const metricSeries = await fetchJson<{ series: Array<{ value: number }>; nextCursor?: string }>(
+      `${dashboardUrl}/api/metrics/http.server.duration/series?from=1715840000550&limit=1`
+    );
+    expect(metricSeries.series.map((point) => point.value)).toEqual([18.25]);
+    expect(metricSeries.nextCursor).toBeUndefined();
   });
 });
 
@@ -432,7 +582,7 @@ function logPayload(overrides: Partial<{ body: string }> = {}) {
   };
 }
 
-function metricPayload() {
+function metricPayload(route = "/orders") {
   return {
     resourceMetrics: [
       {
@@ -452,12 +602,12 @@ function metricPayload() {
                     {
                       timeUnixNano: "1715840000500000000",
                       asDouble: 12.5,
-                      attributes: [{ key: "route", value: { stringValue: "/orders" } }]
+                      attributes: [{ key: "route", value: { stringValue: route } }]
                     },
                     {
                       timeUnixNano: "1715840000600000000",
                       asDouble: 18.25,
-                      attributes: [{ key: "route", value: { stringValue: "/orders" } }]
+                      attributes: [{ key: "route", value: { stringValue: route } }]
                     }
                   ]
                 }

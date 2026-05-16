@@ -24,6 +24,7 @@ export interface MemoryStoreLimits {
   maxLogs: number;
   maxBatches: number;
   maxMetrics?: number;
+  maxMetricAttributeSets?: number;
 }
 
 export class MemoryTelemetryStore implements TelemetryStore {
@@ -39,10 +40,11 @@ export class MemoryTelemetryStore implements TelemetryStore {
   }
 
   ingest(batch: IngestBatch): IngestResult {
+    const metrics = this.filterMetricsByCardinality(batch.metrics);
     this.batches.push(batch.raw);
     this.spans.push(...batch.spans);
     this.logs.push(...batch.logs);
-    this.metrics.push(...batch.metrics);
+    this.metrics.push(...metrics);
 
     trimStart(this.batches, this.limits.maxBatches);
     trimStart(this.spans, this.limits.maxSpans);
@@ -52,9 +54,9 @@ export class MemoryTelemetryStore implements TelemetryStore {
     this.rebuildTraceSummaries();
 
     return {
-      accepted: batch.spans.length + batch.logs.length + batch.metrics.length,
-      rejected: 0,
-      warnings: []
+      accepted: batch.spans.length + batch.logs.length + metrics.length,
+      rejected: batch.metrics.length - metrics.length,
+      warnings: metrics.length === batch.metrics.length ? [] : [`Dropped ${batch.metrics.length - metrics.length} metric points due to attribute cardinality limits.`]
     };
   }
 
@@ -111,6 +113,12 @@ export class MemoryTelemetryStore implements TelemetryStore {
     if (query.minDurationMs !== undefined) {
       rows = rows.filter((trace) => trace.durationNano >= query.minDurationMs! * 1_000_000);
     }
+    if (query.fromUnixNano) {
+      rows = rows.filter((trace) => trace.endTimeUnixNano >= query.fromUnixNano!);
+    }
+    if (query.toUnixNano) {
+      rows = rows.filter((trace) => trace.startTimeUnixNano <= query.toUnixNano!);
+    }
     if (query.q) {
       const q = query.q.toLowerCase();
       rows = rows.filter((trace) => trace.rootName.toLowerCase().includes(q) || trace.traceId.includes(q));
@@ -118,7 +126,7 @@ export class MemoryTelemetryStore implements TelemetryStore {
 
     return rows
       .sort((a, b) => Number(b.startTimeUnixNano) - Number(a.startTimeUnixNano))
-      .slice(0, query.limit);
+      .slice(query.offset ?? 0, (query.offset ?? 0) + query.limit);
   }
 
   getTrace(traceId: string): TraceDetail | undefined {
@@ -166,10 +174,16 @@ export class MemoryTelemetryStore implements TelemetryStore {
         );
       });
     }
+    if (query.fromUnixNano) {
+      rows = rows.filter((log) => (log.timeUnixNano ?? log.observedTimeUnixNano ?? "0") >= query.fromUnixNano!);
+    }
+    if (query.toUnixNano) {
+      rows = rows.filter((log) => (log.timeUnixNano ?? log.observedTimeUnixNano ?? "0") <= query.toUnixNano!);
+    }
 
     return rows
       .sort((a, b) => Number(b.timeUnixNano ?? b.observedTimeUnixNano ?? 0) - Number(a.timeUnixNano ?? a.observedTimeUnixNano ?? 0))
-      .slice(0, query.limit);
+      .slice(query.offset ?? 0, (query.offset ?? 0) + query.limit);
   }
 
   listMetrics(query: MetricQuery): MetricDescriptor[] {
@@ -179,6 +193,12 @@ export class MemoryTelemetryStore implements TelemetryStore {
         continue;
       }
       if (query.q && !point.metricName.toLowerCase().includes(query.q.toLowerCase())) {
+        continue;
+      }
+      if (query.fromUnixNano && point.timeUnixNano < query.fromUnixNano) {
+        continue;
+      }
+      if (query.toUnixNano && point.timeUnixNano > query.toUnixNano) {
         continue;
       }
 
@@ -205,7 +225,7 @@ export class MemoryTelemetryStore implements TelemetryStore {
     return [...grouped.values()]
       .map(({ attrs: _attrs, ...item }) => item)
       .sort((a, b) => b.lastSeen - a.lastSeen)
-      .slice(0, query.limit);
+      .slice(query.offset ?? 0, (query.offset ?? 0) + query.limit);
   }
 
   getMetricSeries(query: MetricSeriesQuery): MetricSeriesPoint[] {
@@ -213,8 +233,10 @@ export class MemoryTelemetryStore implements TelemetryStore {
       .filter((point) => point.metricName === query.metricName)
       .filter((point) => !query.service || point.serviceName === query.service)
       .filter((point) => !query.attrs || point.attributesHash === query.attrs)
+      .filter((point) => !query.fromUnixNano || point.timeUnixNano >= query.fromUnixNano)
+      .filter((point) => !query.toUnixNano || point.timeUnixNano <= query.toUnixNano)
       .sort((a, b) => Number(a.timeUnixNano) - Number(b.timeUnixNano))
-      .slice(-query.limit)
+      .slice(query.offset ?? 0, (query.offset ?? 0) + query.limit)
       .map((point) => ({
         timeUnixNano: point.timeUnixNano,
         value: point.value,
@@ -300,6 +322,28 @@ export class MemoryTelemetryStore implements TelemetryStore {
     return nanoid(12);
   }
 
+  private filterMetricsByCardinality(metrics: NormalizedMetricPoint[]) {
+    const limit = this.limits.maxMetricAttributeSets ?? 1_000;
+    const seen = new Map<string, Set<string>>();
+    for (const point of this.metrics) {
+      const key = metricCardinalityKey(point);
+      const attrs = seen.get(key) ?? new Set<string>();
+      attrs.add(point.attributesHash);
+      seen.set(key, attrs);
+    }
+
+    return metrics.filter((point) => {
+      const key = metricCardinalityKey(point);
+      const attrs = seen.get(key) ?? new Set<string>();
+      if (!attrs.has(point.attributesHash) && attrs.size >= limit) {
+        return false;
+      }
+      attrs.add(point.attributesHash);
+      seen.set(key, attrs);
+      return true;
+    });
+  }
+
   private rebuildTraceSummaries() {
     const traces = new Map<string, NormalizedSpan[]>();
     for (const span of this.spans) {
@@ -357,6 +401,10 @@ function removeWhere<T>(items: T[], predicate: (item: T) => boolean) {
   }
 }
 
+function metricCardinalityKey(point: NormalizedMetricPoint) {
+  return `${point.serviceName}\n${point.meterName}\n${point.metricName}\n${point.metricType}`;
+}
+
 export function summarizeGenAi(spans: NormalizedSpan[]): GenAiTraceSummary {
   const genAiSpans = spans
     .map((span) => classifyGenAiSpan(span))
@@ -389,9 +437,13 @@ export function summarizeGenAi(spans: NormalizedSpan[]): GenAiTraceSummary {
       })),
     rag: {
       retrievalSpanCount: genAiSpans.filter((span) => span.kind === "retrieval").length,
-      retrievedDocCount: genAiSpans.reduce((sum, span) => sum + (span.retrievedDocCount ?? 0), 0),
+      retrievedDocCount: genAiSpans.reduce((sum, span) => sum + (span.retrievedDocCount ?? span.retrievedDocuments.length), 0),
       rerankSpanCount: genAiSpans.filter((span) => span.kind === "rerank").length,
-      embeddingSpanCount: genAiSpans.filter((span) => span.kind === "embedding").length
+      embeddingSpanCount: genAiSpans.filter((span) => span.kind === "embedding").length,
+      documents: genAiSpans.flatMap((span) => span.retrievedDocuments.map((document) => ({
+        spanId: span.spanId,
+        ...document
+      }))).slice(0, 20)
     },
     longestStep: longest ? { spanId: longest.spanId, name: longest.name, durationNano: longest.durationNano ?? 0 } : undefined,
     inputTokens,
@@ -448,6 +500,7 @@ function classifyGenAiSpan(span: NormalizedSpan) {
     outputTokens: readNumber(attrs, "gen_ai.usage.output_tokens") ?? readNumber(attrs, "llm.token_count.completion") ?? readNumber(attrs, "llm.usage.completion_tokens"),
     toolName: readString(attrs, "tool.name") ?? readString(attrs, "mcp.tool.name") ?? readString(attrs, "function.name"),
     retrievedDocCount: readNumber(attrs, "retrieval.documents.count") ?? readNumber(attrs, "rag.retrieved_doc_count") ?? readNumber(attrs, "retrieved_document_count"),
+    retrievedDocuments: extractRagDocuments(attrs),
     redactedContentKeys: Object.keys(attrs).filter((key) => typeof attrs[key] === "string" && String(attrs[key]).includes("[redacted"))
   };
 }
@@ -495,4 +548,47 @@ function sumDefined(values: Array<number | undefined>): number | undefined {
     return undefined;
   }
   return present.reduce((sum, value) => sum + value, 0);
+}
+
+function extractRagDocuments(attrs: Record<string, unknown>) {
+  const direct = attrs["retrieval.documents"] ?? attrs["openinference.retrieval.documents"] ?? attrs["rag.documents"];
+  if (Array.isArray(direct)) {
+    return direct.map((item) => normalizeRagDocument(item)).filter((item) => item.contentPreview || item.title || item.id);
+  }
+
+  const grouped = new Map<string, Record<string, unknown>>();
+  for (const [key, value] of Object.entries(attrs)) {
+    const match = key.match(/(?:retrieval|rag)\.documents?\.(\d+)\.(.+)/i);
+    if (!match) {
+      continue;
+    }
+    const index = match[1]!;
+    const field = match[2]!;
+    const document = grouped.get(index) ?? {};
+    document[field] = value;
+    grouped.set(index, document);
+  }
+  return [...grouped.keys()]
+    .sort((a, b) => Number(a) - Number(b))
+    .map((key) => normalizeRagDocument(grouped.get(key)))
+    .filter((item) => item.contentPreview || item.title || item.id);
+}
+
+function normalizeRagDocument(value: unknown) {
+  const record = isRecord(value) ? value : {};
+  const content = readString(record, "content") ?? readString(record, "document.content") ?? readString(record, "text") ?? (typeof value === "string" ? value : undefined);
+  return {
+    id: readString(record, "id") ?? readString(record, "document.id"),
+    title: readString(record, "title") ?? readString(record, "document.title"),
+    score: readNumber(record, "score") ?? readNumber(record, "document.score"),
+    contentPreview: content ? truncate(content, 220) : undefined
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function truncate(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value;
 }

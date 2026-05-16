@@ -16,11 +16,16 @@ This repository currently implements the Phase 1 MVP, the core Phase 2 persisten
 - OTLP/gRPC receiver on `4317`
 - GenAI/Agent timeline summaries with default normalized-data redaction
 - MCP stdio server for local coding agents
+- MCP Streamable HTTP server for IDE/plugin integrations
+- API cursor pagination and time range filters
+- metric attribute cardinality protection
+- SQLite DB size retention
+- Buf generation workflow for official OTLP TypeScript bindings
 - REST query API
 - React dashboard UI
 - CLI entrypoint
 
-Full generated OTLP proto bindings, PromQL-style metrics queries, Streamable HTTP MCP, and deeper RAG document inspection remain planned v1 work.
+PromQL-style metrics queries and production-grade auth remain planned future work.
 
 ## Start
 
@@ -82,13 +87,15 @@ pnpm --filter @devdash/cli start -- clear
 pnpm --filter @devdash/cli start -- export --out ./telemetry.json
 pnpm --filter @devdash/cli start -- import ./telemetry.json
 pnpm --filter @devdash/cli start -- retention --retention 7d --max-logs 100000 --max-metrics 100000
+pnpm --filter @devdash/cli start -- retention --max-db-size 2gb
 pnpm --filter @devdash/cli start -- mcp --dashboard-url http://127.0.0.1:18888
+pnpm --filter @devdash/cli start -- mcp-http --port 18889 --dashboard-url http://127.0.0.1:18888
 ```
 
 SQLite persistence:
 
 ```bash
-pnpm --filter @devdash/cli start -- serve --storage sqlite --db ./.otel/devdash.db
+pnpm --filter @devdash/cli start -- serve --storage sqlite --db ./.otel/devdash.db --retention 7d --max-db-size 2gb
 ```
 
 Docker:
@@ -118,6 +125,8 @@ POST /api/import
 POST /api/retention
 ```
 
+List APIs accept `limit`, `cursor`, `from`, and `to` where relevant. `from` and `to` can be Unix millis, Unix nanos, or ISO timestamps.
+
 ## OTLP receiver
 
 ```http
@@ -144,3 +153,27 @@ find_slow_operations
 ```
 
 The MCP command uses stdio transport and reads dashboard data through the local HTTP API.
+
+For Streamable HTTP MCP:
+
+```bash
+pnpm --filter @devdash/cli start -- mcp-http --port 18889
+```
+
+The endpoint is `http://127.0.0.1:18889/mcp`.
+
+## Proto generation
+
+Official OTLP TypeScript bindings are generated with Buf:
+
+```bash
+pnpm --filter @devdash/otel-proto generate
+```
+
+Generated files live in `packages/otel-proto/generated`.
+
+## Examples
+
+- `examples/python-agent`: Python agent trace with GenAI and RAG metadata.
+- `examples/ts-agent`: TypeScript agent trace with LLM/MCP/RAG spans.
+- `examples/dotnet-webapi`: .NET WebAPI OpenTelemetry setup for OTLP/HTTP and OTLP/gRPC.

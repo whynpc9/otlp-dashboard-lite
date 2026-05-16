@@ -91,6 +91,13 @@ export interface TraceDetail extends TraceSummary {
       retrievedDocCount: number;
       rerankSpanCount: number;
       embeddingSpanCount: number;
+      documents: Array<{
+        spanId: string;
+        id?: string | undefined;
+        title?: string | undefined;
+        score?: number | undefined;
+        contentPreview?: string | undefined;
+      }>;
     };
     longestStep?: {
       spanId: string;

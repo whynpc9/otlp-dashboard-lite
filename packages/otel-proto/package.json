@@ -1,0 +1,22 @@
+{
+  "name": "@devdash/otel-proto",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./generated/*": "./generated/*.js"
+  },
+  "scripts": {
+    "generate": "buf generate buf.build/opentelemetry/opentelemetry --template buf.gen.yaml --path opentelemetry/proto/collector/trace/v1/trace_service.proto --path opentelemetry/proto/collector/logs/v1/logs_service.proto --path opentelemetry/proto/collector/metrics/v1/metrics_service.proto --path opentelemetry/proto/trace/v1/trace.proto --path opentelemetry/proto/logs/v1/logs.proto --path opentelemetry/proto/metrics/v1/metrics.proto",
+    "check": "test -f generated/opentelemetry/proto/collector/trace/v1/trace_service_pb.ts",
+    "build": "pnpm run check",
+    "test": "pnpm run check"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.12.0"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.69.0",
+    "@bufbuild/protoc-gen-es": "^2.12.0"
+  }
+}

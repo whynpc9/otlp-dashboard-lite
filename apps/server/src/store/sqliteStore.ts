@@ -1,6 +1,6 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { dirname } from "node:path";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import type {
   IngestBatch,
   IngestResult,
@@ -24,14 +24,16 @@ import { summarizeGenAi } from "./memoryStore.js";
 export class SqliteTelemetryStore implements TelemetryStore {
   private readonly db: DatabaseSync;
   private readonly dbPath: string;
+  private readonly maxMetricAttributeSets: number;
   private readonly insertBatchStmt: StatementSync;
   private readonly insertSpanStmt: StatementSync;
   private readonly insertLogStmt: StatementSync;
   private readonly insertMetricStmt: StatementSync;
   private readonly upsertSummaryStmt: StatementSync;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options: { maxMetricAttributeSets?: number } = {}) {
     this.dbPath = dbPath;
+    this.maxMetricAttributeSets = options.maxMetricAttributeSets ?? 1_000;
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
@@ -110,8 +112,12 @@ export class SqliteTelemetryStore implements TelemetryStore {
       for (const log of batch.logs) {
         this.insertLog(log);
       }
+      let acceptedMetrics = 0;
       for (const metric of batch.metrics) {
-        this.insertMetric(metric);
+        if (this.canInsertMetric(metric)) {
+          this.insertMetric(metric);
+          acceptedMetrics += 1;
+        }
       }
 
       for (const traceId of new Set(batch.spans.map((span) => span.traceId))) {
@@ -120,9 +126,9 @@ export class SqliteTelemetryStore implements TelemetryStore {
       this.db.exec("commit");
 
       return {
-        accepted: batch.spans.length + batch.logs.length + batch.metrics.length,
-        rejected: 0,
-        warnings: []
+        accepted: batch.spans.length + batch.logs.length + acceptedMetrics,
+        rejected: batch.metrics.length - acceptedMetrics,
+        warnings: acceptedMetrics === batch.metrics.length ? [] : [`Dropped ${batch.metrics.length - acceptedMetrics} metric points due to attribute cardinality limits.`]
       };
     } catch (error) {
       this.db.exec("rollback");
@@ -182,8 +188,9 @@ export class SqliteTelemetryStore implements TelemetryStore {
   }
 
   listTraces(query: TraceListQuery): TraceSummary[] {
+    const offset = query.offset ?? 0;
     let rows = (this.db.prepare("select * from trace_summaries order by start_time_unix_nano desc limit ?")
-      .all(Math.max(query.limit * 4, query.limit)) as unknown as SummaryRow[]).map(summaryFromRow);
+      .all(Math.max((offset + query.limit) * 4, query.limit)) as unknown as SummaryRow[]).map(summaryFromRow);
 
     if (query.service) {
       rows = rows.filter((trace) => trace.serviceNames.includes(query.service!));
@@ -194,12 +201,18 @@ export class SqliteTelemetryStore implements TelemetryStore {
     if (query.minDurationMs !== undefined) {
       rows = rows.filter((trace) => trace.durationNano >= query.minDurationMs! * 1_000_000);
     }
+    if (query.fromUnixNano) {
+      rows = rows.filter((trace) => trace.endTimeUnixNano >= query.fromUnixNano!);
+    }
+    if (query.toUnixNano) {
+      rows = rows.filter((trace) => trace.startTimeUnixNano <= query.toUnixNano!);
+    }
     if (query.q) {
       const q = query.q.toLowerCase();
       rows = rows.filter((trace) => trace.rootName.toLowerCase().includes(q) || trace.traceId.includes(q));
     }
 
-    return rows.slice(0, query.limit);
+    return rows.slice(offset, offset + query.limit);
   }
 
   getTrace(traceId: string): TraceDetail | undefined {
@@ -221,8 +234,9 @@ export class SqliteTelemetryStore implements TelemetryStore {
   }
 
   listLogs(query: LogQuery): NormalizedLogRecord[] {
+    const offset = query.offset ?? 0;
     let rows = (this.db.prepare("select * from logs order by coalesce(time_unix_nano, observed_time_unix_nano, '0') desc limit ?")
-      .all(Math.max(query.limit * 4, query.limit)) as unknown as LogRow[]).map(logFromRow);
+      .all(Math.max((offset + query.limit) * 4, query.limit)) as unknown as LogRow[]).map(logFromRow);
 
     if (query.service) {
       rows = rows.filter((log) => log.serviceName === query.service);
@@ -240,11 +254,18 @@ export class SqliteTelemetryStore implements TelemetryStore {
       const q = query.q.toLowerCase();
       rows = rows.filter((log) => (log.bodyText ?? "").toLowerCase().includes(q) || JSON.stringify(log.attributes).toLowerCase().includes(q));
     }
+    if (query.fromUnixNano) {
+      rows = rows.filter((log) => (log.timeUnixNano ?? log.observedTimeUnixNano ?? "0") >= query.fromUnixNano!);
+    }
+    if (query.toUnixNano) {
+      rows = rows.filter((log) => (log.timeUnixNano ?? log.observedTimeUnixNano ?? "0") <= query.toUnixNano!);
+    }
 
-    return rows.slice(0, query.limit);
+    return rows.slice(offset, offset + query.limit);
   }
 
   listMetrics(query: MetricQuery): MetricDescriptor[] {
+    const offset = query.offset ?? 0;
     let rows = (this.db.prepare(`
       select
         service_name as serviceName,
@@ -260,7 +281,7 @@ export class SqliteTelemetryStore implements TelemetryStore {
       group by service_name, meter_name, metric_name, metric_type
       order by lastSeenNano desc
       limit ?
-    `).all(Math.max(query.limit * 4, query.limit)) as unknown as MetricDescriptorRow[]).map(metricDescriptorFromRow);
+    `).all(Math.max((offset + query.limit) * 4, query.limit)) as unknown as MetricDescriptorRow[]).map(metricDescriptorFromRow);
 
     if (query.service) {
       rows = rows.filter((metric) => metric.serviceName === query.service);
@@ -269,16 +290,23 @@ export class SqliteTelemetryStore implements TelemetryStore {
       const q = query.q.toLowerCase();
       rows = rows.filter((metric) => metric.metricName.toLowerCase().includes(q));
     }
-    return rows.slice(0, query.limit);
+    if (query.fromUnixNano) {
+      rows = rows.filter((metric) => String(Math.floor(metric.lastSeen * 1_000_000)) >= query.fromUnixNano!);
+    }
+    if (query.toUnixNano) {
+      rows = rows.filter((metric) => String(Math.floor(metric.lastSeen * 1_000_000)) <= query.toUnixNano!);
+    }
+    return rows.slice(offset, offset + query.limit);
   }
 
   getMetricSeries(query: MetricSeriesQuery): MetricSeriesPoint[] {
+    const offset = query.offset ?? 0;
     let rows = (this.db.prepare(`
       select * from metric_points
       where metric_name = ?
       order by time_unix_nano desc
       limit ?
-    `).all(query.metricName, Math.max(query.limit * 4, query.limit)) as unknown as MetricPointRow[]).map(metricPointFromRow);
+    `).all(query.metricName, Math.max((offset + query.limit) * 4, query.limit)) as unknown as MetricPointRow[]).map(metricPointFromRow);
 
     if (query.service) {
       rows = rows.filter((point) => point.serviceName === query.service);
@@ -286,10 +314,16 @@ export class SqliteTelemetryStore implements TelemetryStore {
     if (query.attrs) {
       rows = rows.filter((point) => point.attributesHash === query.attrs);
     }
+    if (query.fromUnixNano) {
+      rows = rows.filter((point) => point.timeUnixNano >= query.fromUnixNano!);
+    }
+    if (query.toUnixNano) {
+      rows = rows.filter((point) => point.timeUnixNano <= query.toUnixNano!);
+    }
 
     return rows
-      .sort((a, b) => Number(a.timeUnixNano) - Number(b.timeUnixNano))
-      .slice(-query.limit)
+      .sort((a, b) => a.timeUnixNano.localeCompare(b.timeUnixNano))
+      .slice(offset, offset + query.limit)
       .map((point) => ({
         timeUnixNano: point.timeUnixNano,
         value: point.value,
@@ -362,6 +396,9 @@ export class SqliteTelemetryStore implements TelemetryStore {
         deleted += this.deleteTrace(row.trace_id);
       }
     }
+    if (policy.maxDbSizeBytes !== undefined) {
+      deleted += this.enforceDbSize(policy.maxDbSizeBytes);
+    }
     return { deleted };
   }
 
@@ -383,7 +420,8 @@ export class SqliteTelemetryStore implements TelemetryStore {
       traces: count(this.db, "trace_summaries"),
       metrics: count(this.db, "metric_points"),
       storage: "sqlite",
-      dbPath: this.dbPath
+      dbPath: this.dbPath,
+      dbSizeBytes: this.databaseSizeBytes()
     };
   }
 
@@ -579,6 +617,23 @@ export class SqliteTelemetryStore implements TelemetryStore {
     );
   }
 
+  private canInsertMetric(metric: NormalizedMetricPoint) {
+    const existing = this.db.prepare(`
+      select 1 from metric_points
+      where service_name = ? and meter_name = ? and metric_name = ? and metric_type = ? and attributes_hash = ?
+      limit 1
+    `).get(metric.serviceName, metric.meterName, metric.metricName, metric.metricType, metric.attributesHash);
+    if (existing) {
+      return true;
+    }
+    const row = this.db.prepare(`
+      select count(distinct attributes_hash) as count
+      from metric_points
+      where service_name = ? and meter_name = ? and metric_name = ? and metric_type = ?
+    `).get(metric.serviceName, metric.meterName, metric.metricName, metric.metricType) as { count: number } | undefined;
+    return Number(row?.count ?? 0) < this.maxMetricAttributeSets;
+  }
+
   private refreshTraceSummary(traceId: string) {
     const spans = (this.db.prepare("select * from spans where trace_id = ? order by start_time_unix_nano")
       .all(traceId) as unknown as SpanRow[]).map(spanFromRow);
@@ -634,6 +689,37 @@ export class SqliteTelemetryStore implements TelemetryStore {
 
   private deleteEmptyTraceSummaries() {
     this.db.exec("delete from trace_summaries where trace_id not in (select distinct trace_id from spans)");
+  }
+
+  private enforceDbSize(maxDbSizeBytes: number) {
+    let deleted = 0;
+    let guard = 0;
+    this.compactDatabase();
+    while (this.databaseSizeBytes() > maxDbSizeBytes && guard < 1_000) {
+      guard += 1;
+      const trace = this.db.prepare("select trace_id from trace_summaries order by start_time_unix_nano asc limit 1").get() as { trace_id: string } | undefined;
+      if (trace) {
+        deleted += this.deleteTrace(trace.trace_id);
+      } else if (count(this.db, "logs") > 0) {
+        deleted += this.deleteOverflow("logs", "coalesce(time_unix_nano, observed_time_unix_nano, '0')", Math.max(0, count(this.db, "logs") - 1));
+      } else if (count(this.db, "metric_points") > 0) {
+        deleted += this.deleteOverflow("metric_points", "time_unix_nano", Math.max(0, count(this.db, "metric_points") - 1));
+      } else {
+        break;
+      }
+      this.compactDatabase();
+    }
+    return deleted;
+  }
+
+  private compactDatabase() {
+    this.db.exec("pragma wal_checkpoint(TRUNCATE); vacuum;");
+  }
+
+  private databaseSizeBytes() {
+    return [this.dbPath, `${this.dbPath}-wal`, `${this.dbPath}-shm`].reduce((sum, file) => {
+      return sum + (existsSync(file) ? statSync(file).size : 0);
+    }, 0);
   }
 }
 
