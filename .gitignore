@@ -1,0 +1,8 @@
+node_modules
+dist
+.turbo
+.otel
+tmp
+*.log
+*.tgz
+.DS_Store

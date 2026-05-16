@@ -1,0 +1,24 @@
+{
+  "name": "oltp-dashboard-lite",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local OTLP Workbench for microservices and AI agents.",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"pnpm --filter @devdash/server dev\" \"pnpm --filter @devdash/web dev\"",
+    "serve": "pnpm --filter @devdash/cli start -- serve",
+    "build": "pnpm -r build",
+    "check": "pnpm -r check",
+    "test": "pnpm -r test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "concurrently": "^9.1.2",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4"
+  }
+}
