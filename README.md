@@ -182,6 +182,7 @@ This runs install, typecheck, tests, build, and a CLI package pack dry-run into 
 
 ## Examples
 
-- `examples/python-agent`: Python agent trace with GenAI and RAG metadata.
-- `examples/ts-agent`: TypeScript agent trace with LLM/MCP/RAG spans.
-- `examples/dotnet-webapi`: runnable .NET WebAPI OpenTelemetry smoke app for OTLP/HTTP and OTLP/gRPC.
+- [GenAI OpenTelemetry framework support matrix](./docs/genai-framework-support.md)
+- `examples/dotnet-webapi`: .NET `Microsoft.Extensions.AI` DeepSeek GenAI telemetry probe.
+- `examples/python-agent`: Python LangChain DeepSeek GenAI telemetry probe.
+- `examples/ts-agent`: TypeScript AI SDK DeepSeek GenAI telemetry probe.

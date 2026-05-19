@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "examples/ts-agent"
 allowBuilds:
   '@bufbuild/buf': true
   esbuild: true

@@ -523,6 +523,94 @@ describe("OTLP HTTP receiver", () => {
     expect(conv[3]?.contentPreview).toContain("D35.2");
   });
 
+  it("maps AI SDK telemetry attributes into GenAI trace summaries", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    const promptMessages = [
+      { role: "user", content: [{ type: "text", text: "Ping DeepSeek through AI SDK." }] }
+    ];
+
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      name: "ai.generateText.doGenerate",
+      extraAttributes: [
+        { key: "gen_ai.system", value: { stringValue: "" } },
+        { key: "gen_ai.request.model", value: { stringValue: "" } },
+        { key: "ai.model.provider", value: { stringValue: "deepseek" } },
+        { key: "ai.model.id", value: { stringValue: "deepseek-chat" } },
+        { key: "ai.operationId", value: { stringValue: "ai.generateText" } },
+        { key: "ai.usage.promptTokens", value: { intValue: 12 } },
+        { key: "ai.usage.completionTokens", value: { intValue: 7 } },
+        { key: "ai.prompt.messages", value: { stringValue: JSON.stringify(promptMessages) } },
+        { key: "ai.response.text", value: { stringValue: "AI SDK DeepSeek telemetry succeeded." } }
+      ]
+    }));
+
+    const detail = await fetchJson<{ trace: { genAi: { spans: Array<{ provider?: string; model?: string; inputTokens?: number; outputTokens?: number }>; conversation: Array<{ role: string; contentPreview: string }> } } }>(
+      `${addressUrl(running.dashboard)}/api/traces/11111111111111111111111111111111`
+    );
+
+    expect(detail.trace.genAi.spans[0]).toMatchObject({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      inputTokens: 12,
+      outputTokens: 7
+    });
+    expect(detail.trace.genAi.conversation.map((turn) => `${turn.role}:${turn.contentPreview}`)).toEqual([
+      "user:Ping DeepSeek through AI SDK.",
+      "assistant:AI SDK DeepSeek telemetry succeeded."
+    ]);
+  });
+
+  it("extracts conversation turns from indexed GenAI prompt and completion attributes", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      name: "ChatOpenAI.chat",
+      extraAttributes: [
+        { key: "gen_ai.provider.name", value: { stringValue: "openai" } },
+        { key: "gen_ai.prompt.0.role", value: { stringValue: "system" } },
+        { key: "gen_ai.prompt.0.content", value: { stringValue: "Use terse answers." } },
+        { key: "gen_ai.prompt.1.role", value: { stringValue: "user" } },
+        { key: "gen_ai.prompt.1.content", value: { stringValue: "Ping DeepSeek from LangChain." } },
+        { key: "gen_ai.completion.0.role", value: { stringValue: "unknown" } },
+        { key: "gen_ai.completion.0.content", value: { stringValue: "LangChain telemetry succeeded." } }
+      ]
+    }));
+
+    const detail = await fetchJson<{ trace: { genAi: { spans: Array<{ provider?: string }>; conversation: Array<{ role: string; contentPreview: string }> } } }>(
+      `${addressUrl(running.dashboard)}/api/traces/11111111111111111111111111111111`
+    );
+
+    expect(detail.trace.genAi.spans[0]?.provider).toBe("openai");
+    expect(detail.trace.genAi.conversation.map((turn) => `${turn.role}:${turn.contentPreview}`)).toEqual([
+      "system:Use terse answers.",
+      "user:Ping DeepSeek from LangChain.",
+      "assistant:LangChain telemetry succeeded."
+    ]);
+  });
+
   it("extracts conversation turns from OTel GenAI span events", async () => {
     running = await startServers({
       host: "127.0.0.1",
