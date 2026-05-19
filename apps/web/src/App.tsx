@@ -17,6 +17,7 @@ import {
   Clock3,
   Cog,
   Database,
+  Download,
   Eraser,
   FileText,
   Gauge,
@@ -37,9 +38,10 @@ import {
   Sun,
   Timer,
   User as UserIcon,
-  Wrench
+  Wrench,
+  X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   clearAllData,
   getHealth,
@@ -74,6 +76,7 @@ const STALE_THRESHOLD_MS = 30_000;
 
 type TimeRangeId = "5m" | "15m" | "1h" | "6h" | "24h" | "all";
 type ThemeMode = "light" | "dark" | "system";
+type SortDirection = "asc" | "desc";
 const TIME_RANGE_STORAGE_KEY = "otlp-time-range";
 const TIME_RANGES: Array<{ id: TimeRangeId; label: string; durationMs: number | null }> = [
   { id: "5m", label: "Last 5 minutes", durationMs: 5 * 60_000 },
@@ -103,6 +106,83 @@ function computeFromMillis(id: TimeRangeId): string | undefined {
   const meta = timeRangeMeta(id);
   if (meta.durationMs === null) return undefined;
   return String(Date.now() - meta.durationMs);
+}
+
+function useCopyFeedback(durationMs = 1200) {
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, []);
+
+  const copy = async (text: string) => {
+    if (!text) return false;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => setCopied(false), durationMs);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  return { copy, copied };
+}
+
+function CopyButton({
+  value,
+  label = "Copy",
+  size = 13,
+  className = ""
+}: {
+  value: string;
+  label?: string;
+  size?: number;
+  className?: string;
+}) {
+  const { copy, copied } = useCopyFeedback();
+
+  return (
+    <button
+      type="button"
+      className={`copy-button ${className}`.trim()}
+      onClick={(event) => {
+        event.stopPropagation();
+        void copy(value);
+      }}
+      title={copied ? "Copied" : label}
+      aria-label={copied ? "Copied" : label}
+      disabled={!value}
+    >
+      {copied ? <Check size={size} /> : <ClipboardCopy size={size} />}
+    </button>
+  );
+}
+
+function CopyableCode({
+  value,
+  display,
+  copyLabel,
+  className = ""
+}: {
+  value: string;
+  display?: ReactNode;
+  copyLabel?: string;
+  className?: string;
+}) {
+  if (!value) {
+    return <span className="muted">—</span>;
+  }
+
+  return (
+    <span className={`copyable-value ${className}`.trim()}>
+      <code title={value}>{display ?? value}</code>
+      <CopyButton value={value} label={copyLabel ?? "Copy"} />
+    </span>
+  );
 }
 
 function useTimeRange(): [TimeRangeId, (id: TimeRangeId) => void] {
@@ -197,6 +277,23 @@ export function App() {
   const [paused, setPaused] = useState(false);
   const [themeMode, setThemeMode] = useTheme();
   const [timeRange, setTimeRange] = useTimeRange();
+  const [jsonPreview, setJsonPreview] = useState<JsonPreviewState | null>(null);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+
+  const openJsonPreview = useCallback((filename: string, data: unknown) => {
+    setJsonPreview({ filename, data });
+  }, []);
+
+  const openTraceJsonPreview = useCallback(async (traceId: string, fallback?: TraceSummary) => {
+    const filename = `trace-${safeFileName(traceId)}.json`;
+    setJsonPreview({ filename, loading: true });
+    try {
+      const trace = await getTrace(traceId);
+      setJsonPreview({ filename, data: trace ?? fallback ?? { traceId } });
+    } catch {
+      setJsonPreview({ filename, data: fallback ?? { traceId } });
+    }
+  }, []);
 
   const queryClient = useQueryClient();
   const refetchInterval = paused ? false : REFRESH_INTERVAL_MS;
@@ -254,6 +351,7 @@ export function App() {
       setSelectedTraceId("");
       setSelectedSpanId("");
       setSelectedMetricKey("");
+      setClearConfirmOpen(false);
     }
   });
 
@@ -311,8 +409,12 @@ export function App() {
         <div className="sidebar-footer">
           <div className="endpoint-card">
             <span className="label">OTLP endpoints</span>
-            <code>http://localhost:4318</code>
-            <code>grpc://localhost:4317</code>
+            {SETTINGS_ENDPOINTS.filter((item) => item.label.startsWith("OTLP")).map((item) => (
+              <div className="endpoint-row" key={item.label}>
+                <code title={item.value}>{item.value}</code>
+                <CopyButton value={item.value} label={`Copy ${item.label}`} size={12} />
+              </div>
+            ))}
           </div>
         </div>
       </aside>
@@ -332,7 +434,7 @@ export function App() {
               {showTraceDetail ? (
                 trace ? (
                   <span className="page-subtitle">
-                    <code>{shortId(trace.traceId)}</code>
+                    <CopyableCode value={trace.traceId} display={shortId(trace.traceId)} copyLabel="Copy trace ID" />
                   </span>
                 ) : null
               ) : (
@@ -367,7 +469,7 @@ export function App() {
               onErrorsOnlyChange={setErrorsOnly}
               severity={severity}
               onSeverityChange={setSeverity}
-              onClear={() => clearData.mutate()}
+              onClear={() => setClearConfirmOpen(true)}
               clearing={clearData.isPending}
             />
           </div>
@@ -390,12 +492,18 @@ export function App() {
                 setService(name);
                 setActivePage("Metrics");
               }}
+              onPreviewJson={openJsonPreview}
             />
           ) : activePage === "Logs" ? (
-            <LogsPage logs={filteredLogs} loading={logs.isLoading} onOpenTrace={(traceId) => {
-              setSelectedTraceId(traceId);
-              setActivePage("Traces");
-            }} />
+            <LogsPage
+              logs={filteredLogs}
+              loading={logs.isLoading}
+              onOpenTrace={(traceId) => {
+                setSelectedTraceId(traceId);
+                setActivePage("Traces");
+              }}
+              onPreviewJson={openJsonPreview}
+            />
           ) : activePage === "Traces" ? (
             showTraceDetail ? (
               trace ? (
@@ -416,6 +524,7 @@ export function App() {
                 traces={traces.data ?? []}
                 loading={traces.isLoading}
                 onSelect={(id) => setSelectedTraceId(id)}
+                onPreviewJson={openTraceJsonPreview}
               />
             )
           ) : activePage === "Metrics" ? (
@@ -461,6 +570,24 @@ export function App() {
           <StatusChip icon={Clock3} label={paused ? "paused" : "refresh"} value={paused ? "off" : `${REFRESH_INTERVAL_MS / 1000}s`} tone={paused ? "warn" : "muted"} />
         </footer>
       </main>
+
+      {jsonPreview ? (
+        <JsonPreviewModal preview={jsonPreview} onClose={() => setJsonPreview(null)} />
+      ) : null}
+
+      {clearConfirmOpen ? (
+        <ConfirmDialog
+          title="Clear all telemetry?"
+          message="This permanently removes all traces, logs, metrics, and resources from local storage. This cannot be undone."
+          confirmLabel="Clear data"
+          danger
+          loading={clearData.isPending}
+          onConfirm={() => clearData.mutate()}
+          onClose={() => {
+            if (!clearData.isPending) setClearConfirmOpen(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -671,13 +798,19 @@ function searchPlaceholder(page: PageKey) {
   }
 }
 
-function ResourcesPage({ resources, loading, onOpenLogs, onOpenTraces, onOpenMetrics }: {
+function ResourcesPage({ resources, loading, onOpenLogs, onOpenTraces, onOpenMetrics, onPreviewJson }: {
   resources: Array<{ serviceName: string; spanCount: number; logCount: number; lastSeen: number }>;
   loading: boolean;
   onOpenLogs(name: string): void;
   onOpenTraces(name: string): void;
   onOpenMetrics(name: string): void;
+  onPreviewJson(filename: string, data: unknown): void;
 }) {
+  const [timestampSort, setTimestampSort] = useState<SortDirection>("desc");
+  const sortedResources = useMemo(
+    () => sortByTimestamp(resources, timestampSort, (item) => item.lastSeen),
+    [resources, timestampSort]
+  );
   if (loading && resources.length === 0) {
     return <EmptyPanel icon={RotateCw} title="Loading resources…" />;
   }
@@ -687,30 +820,26 @@ function ResourcesPage({ resources, loading, onOpenLogs, onOpenTraces, onOpenMet
   return (
     <div className="panel data-grid resources-grid">
       <div className="data-row data-head resources-row">
-        <span>Name</span>
+        <span>Resource</span>
         <span>State</span>
         <span>Spans</span>
         <span>Logs</span>
-        <span>Last seen</span>
+        <SortHeader direction={timestampSort} onToggle={() => setTimestampSort(toggleSortDirection)}>
+          Timestamp
+        </SortHeader>
         <span>Actions</span>
       </div>
-      {resources.map((item) => {
+      {sortedResources.map((item) => {
         const state = resourceState(item.lastSeen);
         return (
           <div className="data-row resources-row" key={item.serviceName}>
-            <span className="resource-name">
-              <span className="resource-avatar">{item.serviceName.slice(0, 2).toUpperCase()}</span>
-              <span className="resource-name-text">
-                <strong>{item.serviceName}</strong>
-                <code>service</code>
-              </span>
-            </span>
+            <ResourceCell names={[item.serviceName]} showKind />
             <span>
               <StatePill state={state} />
             </span>
             <span className="num">{item.spanCount.toLocaleString()}</span>
             <span className="num">{item.logCount.toLocaleString()}</span>
-            <span className="muted">{formatRelative(item.lastSeen)}</span>
+            <span className="muted mono timestamp-cell" title={formatRelative(item.lastSeen)}>{formatTimestampMs(item.lastSeen)}</span>
             <span className="row-actions">
               <button className="ghost-button" onClick={() => onOpenLogs(item.serviceName)} title="View logs">
                 <FileText size={13} />
@@ -720,6 +849,13 @@ function ResourcesPage({ resources, loading, onOpenLogs, onOpenTraces, onOpenMet
               </button>
               <button className="ghost-button" onClick={() => onOpenMetrics(item.serviceName)} title="View metrics">
                 <Gauge size={13} />
+              </button>
+              <button
+                className="ghost-button"
+                onClick={() => onPreviewJson(`resource-${safeFileName(item.serviceName)}.json`, item)}
+                title="Preview JSON"
+              >
+                <Braces size={13} />
               </button>
             </span>
           </div>
@@ -747,7 +883,40 @@ function StatePill({ state }: { state: "running" | "idle" | "stale" }) {
   );
 }
 
-function LogsPage({ logs, loading, onOpenTrace }: { logs: LogRecord[]; loading: boolean; onOpenTrace(traceId: string): void }) {
+function ResourceCell({ names, showKind = false }: { names: string[]; showKind?: boolean }) {
+  const primary = names[0];
+  if (!primary) {
+    return <span className="muted">—</span>;
+  }
+  const extra = names.length - 1;
+  return (
+    <span className="resource-name">
+      <span className="resource-avatar" aria-hidden="true">
+        {primary.slice(0, 2).toUpperCase()}
+      </span>
+      <span className="resource-name-text">
+        <strong title={names.length > 1 ? names.join(", ") : primary}>{primary}</strong>
+        {showKind ? (
+          <code>service</code>
+        ) : extra > 0 ? (
+          <span className="resource-more">{extra === 1 ? "+1 more" : `+${extra} more`}</span>
+        ) : null}
+      </span>
+    </span>
+  );
+}
+
+function LogsPage({ logs, loading, onOpenTrace, onPreviewJson }: {
+  logs: LogRecord[];
+  loading: boolean;
+  onOpenTrace(traceId: string): void;
+  onPreviewJson(filename: string, data: unknown): void;
+}) {
+  const [timestampSort, setTimestampSort] = useState<SortDirection>("desc");
+  const sortedLogs = useMemo(
+    () => sortByTimestamp(logs, timestampSort, (log) => nanoToMillis(log.timeUnixNano ?? log.observedTimeUnixNano)),
+    [logs, timestampSort]
+  );
   if (loading && logs.length === 0) {
     return <EmptyPanel icon={RotateCw} title="Loading structured logs…" />;
   }
@@ -759,29 +928,44 @@ function LogsPage({ logs, loading, onOpenTrace }: { logs: LogRecord[]; loading: 
       <div className="data-row data-head logs-row">
         <span>Resource</span>
         <span>Level</span>
-        <span>Timestamp</span>
+        <SortHeader direction={timestampSort} onToggle={() => setTimestampSort(toggleSortDirection)}>
+          Timestamp
+        </SortHeader>
         <span>Message</span>
-        <span>Trace</span>
+        <span>TraceId</span>
+        <span>Actions</span>
       </div>
-      {logs.map((log) => (
+      {sortedLogs.map((log) => (
         <div className="data-row logs-row" key={log.id}>
-          <span className="cell-strong">{log.serviceName}</span>
+          <ResourceCell names={[log.serviceName]} />
           <span>
             <span className={severityClass(log.severityText)}>{(log.severityText ?? "INFO").toUpperCase()}</span>
           </span>
-          <span className="muted mono">{formatTimestamp(log.timeUnixNano ?? log.observedTimeUnixNano)}</span>
+          <span className="muted mono timestamp-cell">{formatTimestamp(log.timeUnixNano ?? log.observedTimeUnixNano)}</span>
           <span className="cell-message" title={log.bodyText ?? ""}>
             {log.bodyText ?? JSON.stringify(log.bodyJson ?? log.attributes)}
           </span>
           <span>
             {log.traceId ? (
-              <button className="link-button" onClick={() => onOpenTrace(log.traceId!)} title="Open trace">
-                <GitBranch size={12} />
-                <code>{shortId(log.traceId)}</code>
-              </button>
+              <span className="copyable-value trace-id-cell">
+                <button className="link-button" onClick={() => onOpenTrace(log.traceId!)} title="Open trace">
+                  <GitBranch size={12} />
+                  <code>{shortId(log.traceId)}</code>
+                </button>
+                <CopyButton value={log.traceId} label="Copy trace ID" size={12} />
+              </span>
             ) : (
               <span className="muted">—</span>
             )}
+          </span>
+          <span className="row-actions">
+            <button
+              className="ghost-button"
+              onClick={() => onPreviewJson(`log-${log.id}.json`, log)}
+              title="Preview JSON"
+            >
+              <Braces size={13} />
+            </button>
           </span>
         </div>
       ))}
@@ -789,7 +973,17 @@ function LogsPage({ logs, loading, onOpenTrace }: { logs: LogRecord[]; loading: 
   );
 }
 
-function TracesListPage({ traces, loading, onSelect }: { traces: TraceSummary[]; loading: boolean; onSelect(id: string): void }) {
+function TracesListPage({ traces, loading, onSelect, onPreviewJson }: {
+  traces: TraceSummary[];
+  loading: boolean;
+  onSelect(id: string): void;
+  onPreviewJson(traceId: string, fallback?: TraceSummary): void;
+}) {
+  const [timestampSort, setTimestampSort] = useState<SortDirection>("desc");
+  const sortedTraces = useMemo(
+    () => sortByTimestamp(traces, timestampSort, (trace) => nanoToMillis(trace.startTimeUnixNano)),
+    [traces, timestampSort]
+  );
   const maxDuration = useMemo(() => Math.max(1, ...traces.map((t) => t.durationNano)), [traces]);
   if (loading && traces.length === 0) {
     return <EmptyPanel icon={RotateCw} title="Loading traces…" />;
@@ -800,22 +994,35 @@ function TracesListPage({ traces, loading, onSelect }: { traces: TraceSummary[];
   return (
     <div className="panel data-grid traces-grid">
       <div className="data-row data-head traces-row">
-        <span>Timestamp</span>
+        <SortHeader direction={timestampSort} onToggle={() => setTimestampSort(toggleSortDirection)}>
+          Timestamp
+        </SortHeader>
+        <span>TraceId</span>
         <span>Name</span>
-        <span>Resources</span>
+        <span>Resource</span>
         <span>Spans</span>
         <span>Duration</span>
         <span>Errors</span>
+        <span>Actions</span>
       </div>
-      {traces.map((trace) => {
+      {sortedTraces.map((trace) => {
         const portion = trace.durationNano / maxDuration;
         return (
-          <button
+          <div
             className="data-row traces-row clickable"
             key={trace.traceId}
             onClick={() => onSelect(trace.traceId)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onSelect(trace.traceId);
+              }
+            }}
+            role="button"
+            tabIndex={0}
           >
-            <span className="muted mono">{formatTimestamp(trace.startTimeUnixNano)}</span>
+            <span className="muted mono timestamp-cell">{formatTimestamp(trace.startTimeUnixNano)}</span>
+            <CopyableCode value={trace.traceId} display={shortId(trace.traceId)} copyLabel="Copy trace ID" />
             <span className="cell-strong">
               <strong>
                 {trace.rootName}
@@ -823,14 +1030,8 @@ function TracesListPage({ traces, loading, onSelect }: { traces: TraceSummary[];
                   <Sparkles size={12} className="genai-star" aria-label={`${trace.genAiSpanCount} GenAI spans`} />
                 ) : null}
               </strong>
-              <code>{shortId(trace.traceId)}</code>
             </span>
-            <span className="resource-tags">
-              {trace.serviceNames.slice(0, 3).map((name, index) => (
-                <span key={name} className={`service-tag service-color-${index % 6}`}>{name}</span>
-              ))}
-              {trace.serviceNames.length > 3 ? <span className="service-tag">+{trace.serviceNames.length - 3}</span> : null}
-            </span>
+            <ResourceCell names={trace.serviceNames} />
             <span className="num">{trace.spanCount}</span>
             <span className="duration-cell">
               <DurationRadial portion={portion} />
@@ -846,10 +1047,31 @@ function TracesListPage({ traces, loading, onSelect }: { traces: TraceSummary[];
                 <span className="muted">—</span>
               )}
             </span>
-          </button>
+            <span className="row-actions">
+              <button
+                className="ghost-button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void onPreviewJson(trace.traceId, trace);
+                }}
+                title="Preview JSON"
+              >
+                <Braces size={13} />
+              </button>
+            </span>
+          </div>
         );
       })}
     </div>
+  );
+}
+
+function SortHeader({ children, direction, onToggle }: { children: React.ReactNode; direction: SortDirection; onToggle(): void }) {
+  return (
+    <button className="sort-button active" onClick={onToggle} title={`Sort ${direction === "asc" ? "descending" : "ascending"}`}>
+      <span>{children}</span>
+      <ChevronDown size={12} className={direction === "asc" ? "sort-icon asc" : "sort-icon desc"} />
+    </button>
   );
 }
 
@@ -877,9 +1099,12 @@ function TraceDetailPage({ trace, selectedSpanId, onSelectSpan, onOpenLogs }: {
   return (
     <div className="trace-detail">
       <div className="trace-info-bar">
-        <InfoCell label="Trace ID" value={<code>{shortId(trace.traceId)}</code>} />
+        <InfoCell
+          label="Trace ID"
+          value={<CopyableCode value={trace.traceId} display={shortId(trace.traceId)} copyLabel="Copy trace ID" />}
+        />
         <InfoCell label="Duration" value={formatDuration(trace.durationNano)} />
-        <InfoCell label="Resources" value={resourceCount.toString()} />
+        <InfoCell label="Resource count" value={resourceCount.toString()} />
         <InfoCell label="Depth" value={depth.toString()} />
         <InfoCell label="Total spans" value={trace.spanCount.toString()} />
         <InfoCell label="GenAI spans" value={trace.genAi.spans.length.toString()} tone={trace.genAi.spans.length ? "accent" : undefined} />
@@ -1007,6 +1232,12 @@ function SpanDetails({ trace, selectedSpanId, genAiSpanIds }: { trace: TraceDeta
           {isGenAi ? <Sparkles size={14} className="genai-star" /> : <Braces size={14} />}
           <strong>{span.name}</strong>
           <code>{span.serviceName}</code>
+          <CopyableCode
+            value={span.spanId}
+            display={shortId(span.spanId)}
+            copyLabel="Copy span ID"
+            className="span-id-chip"
+          />
         </div>
         <span className="muted">{formatDuration(span.durationNano)}</span>
       </div>
@@ -1229,7 +1460,12 @@ function PropertiesTable({ record }: { record: Record<string, unknown> }) {
       {entries.map(([key, value]) => (
         <div className="props-row" key={key}>
           <span className="props-key">{key}</span>
-          <span className="props-value">{formatPropValue(value)}</span>
+          <span className="props-value">
+            <span className="props-value-text">{formatPropValue(value)}</span>
+            {formatPropValue(value) !== "—" ? (
+              <CopyButton value={formatPropValue(value)} label={`Copy ${key}`} size={12} />
+            ) : null}
+          </span>
         </div>
       ))}
     </div>
@@ -1427,7 +1663,12 @@ function GenAiPage({ traces, selectedTraceId, onSelect, trace, loading, onOpenIn
                   </span>
                 </div>
                 <div className="genai-list-meta">
-                  <code className="mono">{shortId(item.traceId)}</code>
+                  <CopyableCode
+                    value={item.traceId}
+                    display={shortId(item.traceId)}
+                    copyLabel="Copy trace ID"
+                    className="genai-trace-id"
+                  />
                   <span>·</span>
                   <span>{formatDuration(item.durationNano)}</span>
                   <span>·</span>
@@ -1489,7 +1730,12 @@ function GenAiDetail({ trace, onOpenInTraces, onOpenLogs }: {
             <div className="genai-detail-sub">
               {primary.model ? <code className="genai-model-badge">{primary.model}</code> : null}
               {primary.provider ? <span className="muted">{primary.provider}</span> : null}
-              <span className="muted mono">{shortId(trace.traceId)}</span>
+              <CopyableCode
+                value={trace.traceId}
+                display={shortId(trace.traceId)}
+                copyLabel="Copy trace ID"
+                className="genai-detail-trace-id"
+              />
               <span className="muted">·</span>
               <span className="muted">{formatDuration(trace.durationNano)}</span>
               {trace.errorCount ? (
@@ -1805,7 +2051,10 @@ function SettingsPage({ health }: { health: Health | undefined }) {
           {SETTINGS_ENDPOINTS.map((item) => (
             <div className="settings-row" key={item.label}>
               <span>{item.label}</span>
-              <code>{item.value}</code>
+              <div className="settings-row-value">
+                <code title={item.value}>{item.value}</code>
+                <CopyButton value={item.value} label={`Copy ${item.label}`} size={12} />
+              </div>
             </div>
           ))}
         </div>
@@ -1829,10 +2078,20 @@ function SettingsPage({ health }: { health: Health | undefined }) {
           <span className="muted">cli</span>
         </div>
         <div className="settings-list">
-          <div className="settings-row"><span>Send sample</span><code>./examples/otlp-json-smoke.sh</code></div>
-          <div className="settings-row"><span>Clear data</span><code>pnpm --filter local-otel-workbench start -- clear</code></div>
-          <div className="settings-row"><span>Export</span><code>pnpm --filter local-otel-workbench start -- export --out ./telemetry.json</code></div>
-          <div className="settings-row"><span>Retention</span><code>pnpm --filter local-otel-workbench start -- retention --retention 7d</code></div>
+          {[
+            { label: "Send sample", value: "./examples/otlp-json-smoke.sh" },
+            { label: "Clear data", value: "pnpm --filter local-otel-workbench start -- clear" },
+            { label: "Export", value: "pnpm --filter local-otel-workbench start -- export --out ./telemetry.json" },
+            { label: "Retention", value: "pnpm --filter local-otel-workbench start -- retention --retention 7d" }
+          ].map((item) => (
+            <div className="settings-row" key={item.label}>
+              <span>{item.label}</span>
+              <div className="settings-row-value">
+                <code title={item.value}>{item.value}</code>
+                <CopyButton value={item.value} label={`Copy ${item.label} command`} size={12} />
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -1884,12 +2143,279 @@ function formatRelative(timestampMs: number) {
   return `${days}d ago`;
 }
 
+function toggleSortDirection(direction: SortDirection): SortDirection {
+  return direction === "asc" ? "desc" : "asc";
+}
+
+function sortByTimestamp<T>(items: T[], direction: SortDirection, getTimestampMs: (item: T) => number): T[] {
+  const factor = direction === "asc" ? 1 : -1;
+  return [...items].sort((a, b) => {
+    const left = normalizedSortTimestamp(getTimestampMs(a));
+    const right = normalizedSortTimestamp(getTimestampMs(b));
+    return (left - right) * factor;
+  });
+}
+
+function normalizedSortTimestamp(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 function formatTimestamp(nano: string | undefined): string {
-  if (!nano) return "—";
+  return formatTimestampMs(nanoToMillis(nano));
+}
+
+function formatTimestampMs(ms: number | undefined): string {
+  if (!ms || !Number.isFinite(ms)) return "—";
+  const date = new Date(ms!);
+  return [
+    date.getFullYear(),
+    padDatePart(date.getMonth() + 1),
+    padDatePart(date.getDate())
+  ].join("-") + ` ${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:${padDatePart(date.getSeconds())}`;
+}
+
+function padDatePart(value: number): string {
+  return value.toString().padStart(2, "0");
+}
+
+function nanoToMillis(nano: string | undefined): number {
+  if (!nano) return 0;
   const ms = Number(nano) / 1_000_000;
-  if (!Number.isFinite(ms)) return "—";
-  const date = new Date(ms);
-  return date.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+type JsonPreviewState = {
+  filename: string;
+  data?: unknown;
+  loading?: boolean;
+  error?: string;
+};
+
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  cancelLabel = "Cancel",
+  danger = false,
+  loading = false,
+  onConfirm,
+  onClose
+}: {
+  title: string;
+  message: ReactNode;
+  confirmLabel: string;
+  cancelLabel?: string;
+  danger?: boolean;
+  loading?: boolean;
+  onConfirm(): void;
+  onClose(): void;
+}) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !loading) onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [onClose, loading]);
+
+  return (
+    <div className="confirm-overlay" onClick={() => !loading && onClose()} role="presentation">
+      <div
+        className="confirm-dialog"
+        onClick={(event) => event.stopPropagation()}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        aria-describedby="confirm-dialog-message"
+      >
+        <h3 id="confirm-dialog-title">{title}</h3>
+        <p id="confirm-dialog-message">{message}</p>
+        <footer className="confirm-dialog-footer">
+          <button type="button" className="json-preview-action" onClick={onClose} disabled={loading}>
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            className={danger ? "json-preview-action confirm-danger" : "json-preview-action"}
+            onClick={onConfirm}
+            disabled={loading}
+          >
+            {loading ? "Clearing…" : confirmLabel}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function JsonPreviewModal({ preview, onClose }: { preview: JsonPreviewState; onClose(): void }) {
+  const [copied, setCopied] = useState(false);
+  const jsonText = preview.data !== undefined ? JSON.stringify(preview.data, null, 2) : "";
+  const lines = jsonText ? jsonText.split("\n") : [];
+  const canUseData = !preview.loading && preview.data !== undefined && !preview.error;
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [onClose]);
+
+  async function handleCopy() {
+    if (!canUseData) return;
+    await navigator.clipboard.writeText(jsonText);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div className="json-preview-overlay" onClick={onClose} role="presentation">
+      <div
+        className="json-preview-dialog"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="json-preview-title"
+      >
+        <header className="json-preview-header">
+          <div className="json-preview-title" id="json-preview-title">
+            <FileText size={16} />
+            <strong>{preview.filename}</strong>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="json-preview-scroll">
+          {preview.loading ? (
+            <div className="json-preview-loading">
+              <RotateCw size={18} />
+              <span>Loading JSON…</span>
+            </div>
+          ) : preview.error ? (
+            <p className="json-preview-error">{preview.error}</p>
+          ) : (
+            <pre className="json-preview-code">
+              {lines.map((line, index) => (
+                <div className="json-preview-line" key={index}>
+                  <span className="json-preview-ln">{index + 1}</span>
+                  <code className="json-preview-text">{highlightJsonLine(line)}</code>
+                </div>
+              ))}
+            </pre>
+          )}
+        </div>
+
+        <footer className="json-preview-footer">
+          <button
+            type="button"
+            className="json-preview-action"
+            disabled={!canUseData}
+            onClick={() => exportJsonFile(preview.filename, preview.data)}
+          >
+            <Download size={14} />
+            <span>Download</span>
+          </button>
+          <button type="button" className="json-preview-action" disabled={!canUseData} onClick={() => void handleCopy()}>
+            {copied ? <Check size={14} /> : <ClipboardCopy size={14} />}
+            <span>{copied ? "Copied" : "Copy to clipboard"}</span>
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function highlightJsonLine(line: string): ReactNode {
+  if (!line.trim()) {
+    return line || "\u00a0";
+  }
+
+  const keyValue = /^(\s*)("(?:\\.|[^"\\])*")(\s*:\s*)(.*)$/.exec(line);
+  if (keyValue) {
+    const indent = keyValue[1] ?? "";
+    const key = keyValue[2] ?? "";
+    const colon = keyValue[3] ?? "";
+    const rest = keyValue[4] ?? "";
+    return (
+      <>
+        {indent}
+        <span className="json-hl-key">{key}</span>
+        {colon}
+        {highlightJsonValue(rest)}
+      </>
+    );
+  }
+
+  return highlightJsonValue(line);
+}
+
+function highlightJsonValue(fragment: string): ReactNode {
+  const trimmed = fragment.trim();
+  if (!trimmed) {
+    return fragment;
+  }
+
+  const leading = fragment.slice(0, fragment.indexOf(trimmed));
+  const trailing = fragment.slice(fragment.indexOf(trimmed) + trimmed.length);
+
+  if (/^"(?:\\.|[^"\\])*"$/.test(trimmed)) {
+    return (
+      <>
+        {leading}
+        <span className="json-hl-string">{trimmed}</span>
+        {trailing}
+      </>
+    );
+  }
+  if (/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(trimmed)) {
+    return (
+      <>
+        {leading}
+        <span className="json-hl-number">{trimmed}</span>
+        {trailing}
+      </>
+    );
+  }
+  if (/^(true|false|null)$/.test(trimmed)) {
+    return (
+      <>
+        {leading}
+        <span className="json-hl-literal">{trimmed}</span>
+        {trailing}
+      </>
+    );
+  }
+
+  return fragment;
+}
+
+function exportJsonFile(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function safeFileName(value: string): string {
+  return value.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "resource";
 }
 
 function shortId(value: string) {
