@@ -1342,9 +1342,10 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
             <button type="button" className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}>Preview</button>
             <button type="button" className={view === "raw" ? "active" : ""} onClick={() => setView("raw")}>Raw</button>
           </div>
+          <span className="message-controls-divider" aria-hidden="true" />
           <button
             type="button"
-            className="ghost-button"
+            className="message-action-button"
             onClick={() => copyText("plain")}
             disabled={!hasContent}
             title={hasContent ? "Copy content text (excludes reasoning)" : "No content to copy"}
@@ -1354,7 +1355,7 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
           </button>
           <button
             type="button"
-            className="ghost-button"
+            className="message-action-button"
             onClick={() => copyText("escaped")}
             disabled={!hasContent}
             title={hasContent
@@ -1362,7 +1363,7 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
               : "No content to copy"}
           >
             <Code2 size={12} />
-            <span>{copied === "escaped" ? "Copied" : "Copy as string"}</span>
+            <span>{copied === "escaped" ? "Copied" : "String"}</span>
           </button>
         </div>
       </header>
@@ -1377,14 +1378,18 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
             <span className="message-reasoning-title">
               <Brain size={12} />
               <strong>Reasoning</strong>
-              <span className="muted">· chain of thought</span>
+              <span className="message-reasoning-subtitle">· chain of thought</span>
             </span>
             <span className="message-reasoning-toggle">
-              {reasoningOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              {reasoningOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
               <span>{reasoningOpen ? "Hide" : "Show"}</span>
             </span>
           </button>
-          {reasoningOpen ? <pre className="message-reasoning-body">{reasoning}</pre> : null}
+          {reasoningOpen ? (
+            <div className="message-reasoning-body">
+              <pre>{reasoning}</pre>
+            </div>
+          ) : null}
         </section>
       ) : null}
       <div className="message-body">

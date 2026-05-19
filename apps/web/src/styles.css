@@ -1510,25 +1510,68 @@ h1, h2, h3, h4 {
 .message-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+}
+
+.message-controls-divider {
+  flex: 0 0 1px;
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  background: var(--color-border-soft);
+}
+
+.message-action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-text-muted);
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+
+.message-action-button:hover:not(:disabled) {
+  background: var(--color-panel-hover);
+  color: var(--color-text);
+}
+
+.message-action-button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .segmented {
   display: inline-flex;
+  align-items: stretch;
+  height: 28px;
   border: 1px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 6px;
   overflow: hidden;
   background: var(--color-panel);
 }
 
 .segmented button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
   border: 0;
   background: transparent;
   color: var(--color-text-muted);
   font-size: 11px;
-  padding: 4px 10px;
+  padding: 0 10px;
   cursor: pointer;
   transition: background 100ms ease, color 100ms ease;
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--color-border);
 }
 
 .segmented button:hover {
@@ -1538,6 +1581,7 @@ h1, h2, h3, h4 {
 .segmented button.active {
   background: var(--color-panel-hover);
   color: var(--color-text);
+  font-weight: 500;
 }
 
 .message-body {
@@ -1595,7 +1639,7 @@ h1, h2, h3, h4 {
   margin: 0 12px 8px;
   border: 1px dashed var(--color-border);
   border-radius: 7px;
-  background: var(--color-panel-alt);
+  background: var(--color-panel);
   overflow: hidden;
 }
 
@@ -1609,8 +1653,8 @@ h1, h2, h3, h4 {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 6px 10px;
-  background: transparent;
+  padding: 7px 10px;
+  background: var(--color-panel);
   border: none;
   cursor: pointer;
   font-size: 11.5px;
@@ -1618,8 +1662,8 @@ h1, h2, h3, h4 {
   text-align: left;
 }
 
-.message-reasoning-header:hover {
-  background: var(--color-panel-hover);
+.message-reasoning.open .message-reasoning-header {
+  border-bottom: 1px solid var(--color-border-soft);
 }
 
 .message-reasoning-title {
@@ -1627,10 +1671,14 @@ h1, h2, h3, h4 {
   align-items: center;
   gap: 6px;
   color: var(--color-text-muted);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   font-size: 10.5px;
   font-weight: 600;
+}
+
+.message-reasoning-title svg {
+  color: var(--color-text-faint);
 }
 
 .message-reasoning-title strong {
@@ -1638,19 +1686,34 @@ h1, h2, h3, h4 {
   font-weight: 700;
 }
 
+.message-reasoning-subtitle {
+  color: var(--color-text-faint);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
 .message-reasoning-toggle {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--color-panel-hover);
+  font-size: 10.5px;
+  font-weight: 500;
 }
 
 .message-reasoning-body {
+  padding: 10px 14px 12px 16px;
+  border-top: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-border-strong);
+}
+
+.message-reasoning-body pre {
   margin: 0;
-  padding: 8px 12px 10px;
-  border-top: 1px dashed var(--color-border);
   font-size: 11.5px;
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--color-text-muted);
   font-style: italic;
   white-space: pre-wrap;

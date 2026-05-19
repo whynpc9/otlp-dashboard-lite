@@ -1,0 +1,616 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "frame",
+      "id": "A3WoX",
+      "x": 720,
+      "y": 0,
+      "name": "MessageCard",
+      "reusable": true,
+      "clip": true,
+      "width": 640,
+      "fill": "#f5f0e8",
+      "cornerRadius": 8,
+      "stroke": {
+        "align": "inside",
+        "thickness": {
+          "top": 1,
+          "right": 1,
+          "bottom": 1,
+          "left": 3
+        },
+        "fill": "#cc785c"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "j41abH",
+          "name": "Header",
+          "width": "fill_container",
+          "fill": "#f5f0e8",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#ebe6df"
+          },
+          "gap": 10,
+          "padding": [
+            8,
+            12
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "jdpPQ",
+              "name": "RoleBadge",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "ZNiPn",
+                  "name": "RoleIcon",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "bot",
+                  "iconFontFamily": "lucide",
+                  "fill": "#a9583e"
+                },
+                {
+                  "type": "text",
+                  "id": "eBoZE",
+                  "name": "RoleLabel",
+                  "fill": "#a9583e",
+                  "content": "Assistant",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "JlWf9",
+                  "name": "ReasoningTag",
+                  "fill": "#f5f0e8",
+                  "cornerRadius": 4,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#ebe6df"
+                  },
+                  "gap": 3,
+                  "padding": [
+                    1,
+                    6
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "WPafB",
+                      "width": 11,
+                      "height": 11,
+                      "iconFontName": "brain",
+                      "iconFontFamily": "lucide",
+                      "fill": "#6c6a64"
+                    },
+                    {
+                      "type": "text",
+                      "id": "qKF6Y",
+                      "fill": "#6c6a64",
+                      "content": "reasoning",
+                      "fontFamily": "Inter",
+                      "fontSize": 10.5,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "NONX4",
+              "name": "Controls",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "h3D3CZ",
+                  "name": "Segmented",
+                  "clip": true,
+                  "height": 28,
+                  "fill": "#faf9f5",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#e6dfd8"
+                  },
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "h3Jl6",
+                      "name": "PreviewBtn",
+                      "height": "fill_container",
+                      "fill": "#efe9de",
+                      "padding": [
+                        0,
+                        10
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "gM0A4",
+                          "fill": "#141413",
+                          "content": "Preview",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "dVoFe",
+                      "name": "SegDivider",
+                      "fill": "#e6dfd8",
+                      "width": 1,
+                      "height": 16
+                    },
+                    {
+                      "type": "frame",
+                      "id": "gGPzF",
+                      "name": "RawBtn",
+                      "height": "fill_container",
+                      "padding": [
+                        0,
+                        10
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "knGKp",
+                          "fill": "#6c6a64",
+                          "content": "Raw",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "rectangle",
+                  "id": "U4zrHG",
+                  "name": "GroupDivider",
+                  "fill": "#ebe6df",
+                  "width": 1,
+                  "height": 16
+                },
+                {
+                  "type": "frame",
+                  "id": "HRFGK",
+                  "name": "CopyBtn",
+                  "height": 28,
+                  "fill": "#faf9f5",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#e6dfd8"
+                  },
+                  "gap": 5,
+                  "padding": [
+                    0,
+                    8
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "D9VHm",
+                      "width": 12,
+                      "height": 12,
+                      "iconFontName": "clipboard-copy",
+                      "iconFontFamily": "lucide",
+                      "fill": "#6c6a64"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Z1zkvb",
+                      "fill": "#6c6a64",
+                      "content": "Copy",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "alA8S",
+                  "name": "CopyStringBtn",
+                  "height": 28,
+                  "fill": "#faf9f5",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#e6dfd8"
+                  },
+                  "gap": 4,
+                  "padding": [
+                    0,
+                    8
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "NsUMk",
+                      "width": 12,
+                      "height": 12,
+                      "iconFontName": "code",
+                      "iconFontFamily": "lucide",
+                      "fill": "#6c6a64"
+                    },
+                    {
+                      "type": "text",
+                      "id": "RH9Zn",
+                      "fill": "#6c6a64",
+                      "content": "String",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "v1LCzt",
+          "name": "Reasoning",
+          "width": "fill_container",
+          "fill": "#faf9f5",
+          "cornerRadius": 7,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#e6dfd8"
+          },
+          "layout": "vertical",
+          "padding": [
+            0,
+            12,
+            8,
+            12
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "wD1h6",
+              "name": "ReasoningHeader",
+              "width": "fill_container",
+              "fill": "#faf9f5",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#ebe6df"
+              },
+              "padding": [
+                7,
+                10
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "YOKQy",
+                  "name": "ReasoningTitle",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "BDLGh",
+                      "name": "ReasoningIcon",
+                      "width": 12,
+                      "height": 12,
+                      "iconFontName": "brain",
+                      "iconFontFamily": "lucide",
+                      "fill": "#8e8b82"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Xo635",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "AziRj",
+                          "fill": "#141413",
+                          "content": "REASONING",
+                          "fontFamily": "Inter",
+                          "fontSize": 10.5,
+                          "fontWeight": "700",
+                          "letterSpacing": 0.5
+                        },
+                        {
+                          "type": "text",
+                          "id": "vD4gN",
+                          "fill": "#8e8b82",
+                          "content": "· chain of thought",
+                          "fontFamily": "Inter",
+                          "fontSize": 10.5,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "gtQYX",
+                  "name": "ReasoningToggle",
+                  "fill": "#efe9de",
+                  "cornerRadius": 4,
+                  "gap": 4,
+                  "padding": [
+                    3,
+                    6
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "aHaaH",
+                      "width": 11,
+                      "height": 11,
+                      "iconFontName": "chevron-down",
+                      "iconFontFamily": "lucide",
+                      "fill": "#6c6a64"
+                    },
+                    {
+                      "type": "text",
+                      "id": "sk85E",
+                      "fill": "#6c6a64",
+                      "content": "Hide",
+                      "fontFamily": "Inter",
+                      "fontSize": 10.5,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "N2N7f",
+              "name": "ReasoningBody",
+              "width": "fill_container",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "top": 1,
+                  "left": 2
+                },
+                "fill": "#d6cdbd"
+              },
+              "layout": "vertical",
+              "padding": [
+                10,
+                14,
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "z17X2H",
+                  "name": "ReasoningText",
+                  "fill": "#6c6a64",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Let me think through this step by step. The user is asking about trace instrumentation settings...",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Inter",
+                  "fontSize": 11.5,
+                  "fontWeight": "normal",
+                  "fontStyle": "italic"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "g3puUK",
+          "name": "Body",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "padding": [
+            10,
+            14,
+            12,
+            14
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "IjFKL",
+              "name": "MessageContent",
+              "fill": "#141413",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "To capture chat message content in your traces, set OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true in your environment.",
+              "lineHeight": 1.55,
+              "fontFamily": "Inter",
+              "fontSize": 12.5,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Vh8MM",
+      "x": 0,
+      "y": 0,
+      "name": "MessagesView",
+      "width": 680,
+      "fill": "#faf9f5",
+      "layout": "vertical",
+      "gap": 10,
+      "padding": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "zSw8N",
+          "name": "SectionLabel",
+          "fill": "#6c6a64",
+          "content": "MessagesView",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "id": "nBuJx",
+          "type": "ref",
+          "ref": "A3WoX",
+          "width": "fill_container",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1,
+              "right": 1,
+              "bottom": 1,
+              "left": 3
+            },
+            "fill": "#d6cdbd"
+          },
+          "descendants": {
+            "ZNiPn": {
+              "iconFontName": "settings",
+              "fill": "#6c6a64"
+            },
+            "eBoZE": {
+              "content": "System",
+              "fill": "#252523"
+            },
+            "JlWf9": {
+              "enabled": false
+            },
+            "v1LCzt": {
+              "enabled": false
+            },
+            "IjFKL": {
+              "content": "You are a helpful assistant for OpenTelemetry trace analysis."
+            }
+          }
+        },
+        {
+          "id": "ZZC4S",
+          "type": "ref",
+          "ref": "A3WoX",
+          "width": "fill_container",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1,
+              "right": 1,
+              "bottom": 1,
+              "left": 3
+            },
+            "fill": "#252523"
+          },
+          "descendants": {
+            "ZNiPn": {
+              "iconFontName": "user",
+              "fill": "#252523"
+            },
+            "eBoZE": {
+              "content": "User",
+              "fill": "#141413"
+            },
+            "JlWf9": {
+              "enabled": false
+            },
+            "v1LCzt": {
+              "enabled": false
+            },
+            "IjFKL": {
+              "content": "What environment variable enables GenAI message capture in OpenTelemetry?"
+            }
+          }
+        },
+        {
+          "id": "fcPWe",
+          "type": "ref",
+          "ref": "A3WoX",
+          "width": "fill_container"
+        },
+        {
+          "id": "CPmCR",
+          "type": "ref",
+          "ref": "A3WoX",
+          "width": "fill_container",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1,
+              "right": 1,
+              "bottom": 1,
+              "left": 3
+            },
+            "fill": "#b38008"
+          },
+          "descendants": {
+            "ZNiPn": {
+              "iconFontName": "wrench",
+              "fill": "#8a6308"
+            },
+            "eBoZE": {
+              "content": "Tool · get_env",
+              "fill": "#8a6308"
+            },
+            "JlWf9": {
+              "enabled": false
+            },
+            "v1LCzt": {
+              "enabled": false
+            },
+            "IjFKL": {
+              "content": "{\"name\":\"get_env\",\"arguments\":{\"key\":\"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT\"}}",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 11.5,
+              "fill": "#141413"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
