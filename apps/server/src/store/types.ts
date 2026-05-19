@@ -159,6 +159,7 @@ export interface GenAiTraceSummary {
   conversation: Array<{
     spanId: string;
     role: "system" | "user" | "assistant" | "tool";
+    kind: "message" | "tool-call" | "tool-result";
     name?: string | undefined;
     contentPreview: string;
   }>;
@@ -209,7 +210,7 @@ export interface TelemetryStore {
   listLogs(query: LogQuery): NormalizedLogRecord[];
   listMetrics(query: MetricQuery): MetricDescriptor[];
   getMetricSeries(query: MetricSeriesQuery): MetricSeriesPoint[];
-  listGenAiTraces(): TraceSummary[];
+  listGenAiTraces(query?: GenAiTraceListQuery): TraceSummary[];
   exportData(): unknown;
   importData(data: unknown): { imported: number };
   enforceRetention(policy: RetentionPolicy): { deleted: number };
@@ -265,6 +266,15 @@ export interface MetricQuery {
   toUnixNano?: string | undefined;
   offset?: number | undefined;
   limit: number;
+}
+
+export interface GenAiTraceListQuery {
+  service?: string | undefined;
+  q?: string | undefined;
+  fromUnixNano?: string | undefined;
+  toUnixNano?: string | undefined;
+  offset?: number | undefined;
+  limit?: number | undefined;
 }
 
 export interface MetricSeriesQuery {

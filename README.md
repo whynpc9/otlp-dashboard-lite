@@ -1,4 +1,4 @@
-# Local OTLP Workbench
+# Local OTel Workbench
 
 A lightweight local OTLP/OpenTelemetry dashboard for microservices and AI agents.
 
@@ -83,26 +83,26 @@ export OTEL_SERVICE_NAME=my-service
 ```bash
 pnpm serve
 ./examples/otlp-json-smoke.sh
-pnpm --filter @devdash/cli start -- clear
-pnpm --filter @devdash/cli start -- export --out ./telemetry.json
-pnpm --filter @devdash/cli start -- import ./telemetry.json
-pnpm --filter @devdash/cli start -- retention --retention 7d --max-logs 100000 --max-metrics 100000
-pnpm --filter @devdash/cli start -- retention --max-db-size 2gb
-pnpm --filter @devdash/cli start -- mcp --dashboard-url http://127.0.0.1:18888
-pnpm --filter @devdash/cli start -- mcp-http --port 18889 --dashboard-url http://127.0.0.1:18888
+pnpm --filter local-otel-workbench start -- clear
+pnpm --filter local-otel-workbench start -- export --out ./telemetry.json
+pnpm --filter local-otel-workbench start -- import ./telemetry.json
+pnpm --filter local-otel-workbench start -- retention --retention 7d --max-logs 100000 --max-metrics 100000
+pnpm --filter local-otel-workbench start -- retention --max-db-size 2gb
+pnpm --filter local-otel-workbench start -- mcp --dashboard-url http://127.0.0.1:18888
+pnpm --filter local-otel-workbench start -- mcp-http --port 18889 --dashboard-url http://127.0.0.1:18888
 ```
 
 SQLite persistence:
 
 ```bash
-pnpm --filter @devdash/cli start -- serve --storage sqlite --db ./.otel/devdash.db --retention 7d --max-db-size 2gb
+pnpm --filter local-otel-workbench start -- serve --storage sqlite --db ./.otel/local-otel-workbench.db --retention 7d --max-db-size 2gb
 ```
 
 Docker:
 
 ```bash
-docker build -t local-otlp-workbench .
-docker run --rm -p 18888:18888 -p 4317:4317 -p 4318:4318 local-otlp-workbench
+docker build -t local-otel-workbench .
+docker run --rm -p 18888:18888 -p 4317:4317 -p 4318:4318 local-otel-workbench
 ```
 
 SQLite uses Node 22's built-in `node:sqlite` module. Node currently prints an experimental warning for that module; the store is still covered by integration tests and can be swapped later if the runtime API changes.
@@ -157,7 +157,7 @@ The MCP command uses stdio transport and reads dashboard data through the local 
 For Streamable HTTP MCP:
 
 ```bash
-pnpm --filter @devdash/cli start -- mcp-http --port 18889
+pnpm --filter local-otel-workbench start -- mcp-http --port 18889
 ```
 
 The endpoint is `http://127.0.0.1:18889/mcp`.
@@ -167,7 +167,7 @@ The endpoint is `http://127.0.0.1:18889/mcp`.
 Official OTLP JavaScript and TypeScript declaration bindings are generated with Buf and used by the protobuf ingest path:
 
 ```bash
-pnpm --filter @devdash/otel-proto generate
+pnpm --filter @local-otel/otel-proto generate
 ```
 
 Generated files live in `packages/otel-proto/generated`.

@@ -19,24 +19,28 @@ export interface ServerConfig {
 
 export function readConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
   return {
-    host: process.env.DEVDASH_HOST ?? "127.0.0.1",
-    dashboardPort: Number(process.env.DEVDASH_DASHBOARD_PORT ?? 18888),
-    otlpHttpPort: Number(process.env.DEVDASH_OTLP_HTTP_PORT ?? 4318),
-    otlpGrpcPort: Number(process.env.DEVDASH_OTLP_GRPC_PORT ?? 4317),
-    storage: process.env.DEVDASH_STORAGE === "sqlite" ? "sqlite" : "memory",
-    dbPath: process.env.DEVDASH_DB ?? "./.otel/devdash.db",
-    retentionMs: process.env.DEVDASH_RETENTION ? parseDurationMs(process.env.DEVDASH_RETENTION) : undefined,
-    maxDbSizeBytes: process.env.DEVDASH_MAX_DB_SIZE ? parseBytes(process.env.DEVDASH_MAX_DB_SIZE) : undefined,
-    maxTraces: process.env.DEVDASH_MAX_TRACES ? Number(process.env.DEVDASH_MAX_TRACES) : undefined,
-    webDistDir: process.env.DEVDASH_WEB_DIST,
-    maxSpans: Number(process.env.DEVDASH_MAX_SPANS ?? 50_000),
-    maxLogs: Number(process.env.DEVDASH_MAX_LOGS ?? 100_000),
-    maxMetrics: Number(process.env.DEVDASH_MAX_METRICS ?? 100_000),
-    maxBatches: Number(process.env.DEVDASH_MAX_BATCHES ?? 1_000),
-    maxMetricAttributeSets: Number(process.env.DEVDASH_MAX_METRIC_ATTRIBUTE_SETS ?? 1_000),
-    maxConcurrentIngest: Number(process.env.DEVDASH_MAX_CONCURRENT_INGEST ?? 4),
+    host: env("HOST") ?? "127.0.0.1",
+    dashboardPort: Number(env("DASHBOARD_PORT") ?? 18888),
+    otlpHttpPort: Number(env("OTLP_HTTP_PORT") ?? 4318),
+    otlpGrpcPort: Number(env("OTLP_GRPC_PORT") ?? 4317),
+    storage: env("STORAGE") === "sqlite" ? "sqlite" : "memory",
+    dbPath: env("DB") ?? "./.otel/local-otel-workbench.db",
+    retentionMs: env("RETENTION") ? parseDurationMs(env("RETENTION")!) : undefined,
+    maxDbSizeBytes: env("MAX_DB_SIZE") ? parseBytes(env("MAX_DB_SIZE")!) : undefined,
+    maxTraces: env("MAX_TRACES") ? Number(env("MAX_TRACES")) : undefined,
+    webDistDir: env("WEB_DIST"),
+    maxSpans: Number(env("MAX_SPANS") ?? 50_000),
+    maxLogs: Number(env("MAX_LOGS") ?? 100_000),
+    maxMetrics: Number(env("MAX_METRICS") ?? 100_000),
+    maxBatches: Number(env("MAX_BATCHES") ?? 1_000),
+    maxMetricAttributeSets: Number(env("MAX_METRIC_ATTRIBUTE_SETS") ?? 1_000),
+    maxConcurrentIngest: Number(env("MAX_CONCURRENT_INGEST") ?? 4),
     ...overrides
   };
+}
+
+function env(name: string): string | undefined {
+  return process.env[`LOCAL_OTEL_WORKBENCH_${name}`] ?? process.env[`DEVDASH_${name}`];
 }
 
 export function parseDurationMs(value: string): number | undefined {

@@ -4,7 +4,7 @@ import type { TelemetryStore } from "../store/types.js";
 export function registerApiRoutes(app: FastifyInstance, store: TelemetryStore) {
   app.get("/api/health", async () => ({
     ok: true,
-    service: "Local OTLP Workbench",
+    service: "Local OTel Workbench",
     ...store.stats()
   }));
 
@@ -96,9 +96,20 @@ export function registerApiRoutes(app: FastifyInstance, store: TelemetryStore) {
     };
   });
 
-  app.get("/api/genai/traces", async () => ({
-    traces: store.listGenAiTraces()
-  }));
+  app.get("/api/genai/traces", async (request) => {
+    const query = request.query as Record<string, string | undefined>;
+    const page = pageQuery(query);
+    return {
+      traces: store.listGenAiTraces({
+        service: query.service || undefined,
+        q: query.q || undefined,
+        fromUnixNano: parseTimeUnixNano(query.from),
+        toUnixNano: parseTimeUnixNano(query.to),
+        offset: page.offset,
+        limit: page.limit
+      })
+    };
+  });
 
   app.get("/api/genai/traces/:traceId", async (request, reply) => {
     const { traceId } = request.params as { traceId: string };

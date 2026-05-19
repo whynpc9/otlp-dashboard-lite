@@ -1,43 +1,110 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertCircle,
+  AlertTriangle,
+  ArrowLeft,
+  Bot,
+  Boxes,
   Braces,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleDot,
+  ClipboardCopy,
   Clock3,
+  Cog,
   Database,
+  Eraser,
   FileText,
   Gauge,
   GitBranch,
-  ListFilter,
+  Info,
   MessageSquareCode,
   Monitor,
   Moon,
+  PanelsTopLeft,
   Pause,
   Play,
   Radio,
   RotateCw,
   Search,
   Server,
-  Settings,
+  Settings as SettingsIcon,
   Sparkles,
-  Sun
+  Sun,
+  Timer,
+  User as UserIcon,
+  Wrench
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getHealth, getMetricSeries, getTrace, listLogs, listMetrics, listResources, listTraces, type LogRecord, type MetricDescriptor, type MetricSeriesPoint, type Span, type TraceDetail, type TraceSummary } from "./api.js";
+import {
+  clearAllData,
+  getHealth,
+  getMetricSeries,
+  getTrace,
+  listLogs,
+  listMetrics,
+  listResources,
+  listTraces,
+  type Health,
+  type LogRecord,
+  type MetricDescriptor,
+  type MetricSeriesPoint,
+  type Span,
+  type TraceDetail,
+  type TraceSummary
+} from "./api.js";
 
-type PageKey = "Traces" | "Logs" | "Metrics" | "GenAI" | "Resources" | "Settings";
+type PageKey = "Resources" | "Logs" | "Traces" | "Metrics" | "GenAI" | "Settings";
 
-const nav: Array<{ label: PageKey; icon: typeof GitBranch; hint: string }> = [
-  { label: "Traces", icon: GitBranch, hint: "Distributed traces" },
-  { label: "Logs", icon: FileText, hint: "Correlated log stream" },
-  { label: "Metrics", icon: Gauge, hint: "OTLP metric series" },
-  { label: "GenAI", icon: Sparkles, hint: "LLM & agent timelines" },
-  { label: "Resources", icon: Server, hint: "Reporting services" },
-  { label: "Settings", icon: Settings, hint: "Endpoints & storage" }
+const nav: Array<{ id: PageKey; label: string; icon: typeof GitBranch; hint: string }> = [
+  { id: "Resources", label: "Resources", icon: PanelsTopLeft, hint: "Services reporting telemetry" },
+  { id: "Logs", label: "Structured logs", icon: FileText, hint: "Semantic log stream" },
+  { id: "Traces", label: "Traces", icon: GitBranch, hint: "Distributed traces" },
+  { id: "Metrics", label: "Metrics", icon: Gauge, hint: "OTLP metric instruments" },
+  { id: "GenAI", label: "GenAI", icon: Sparkles, hint: "LLM & agent timelines" },
+  { id: "Settings", label: "Settings", icon: SettingsIcon, hint: "Endpoints & storage" }
 ];
 
 const REFRESH_INTERVAL_MS = 2000;
-const PAGES_WITHOUT_FILTERS: PageKey[] = ["Resources", "Settings"];
+const STALE_THRESHOLD_MS = 30_000;
+
+type TimeRangeId = "5m" | "15m" | "1h" | "6h" | "24h" | "all";
+const TIME_RANGE_STORAGE_KEY = "otlp-time-range";
+const TIME_RANGES: Array<{ id: TimeRangeId; label: string; durationMs: number | null }> = [
+  { id: "5m", label: "Last 5 minutes", durationMs: 5 * 60_000 },
+  { id: "15m", label: "Last 15 minutes", durationMs: 15 * 60_000 },
+  { id: "1h", label: "Last 1 hour", durationMs: 60 * 60_000 },
+  { id: "6h", label: "Last 6 hours", durationMs: 6 * 60 * 60_000 },
+  { id: "24h", label: "Last 24 hours", durationMs: 24 * 60 * 60_000 },
+  { id: "all", label: "All time", durationMs: null }
+];
+
+function timeRangeMeta(id: TimeRangeId) {
+  return TIME_RANGES.find((item) => item.id === id) ?? TIME_RANGES[5]!;
+}
+
+function computeFromMillis(id: TimeRangeId): string | undefined {
+  const meta = timeRangeMeta(id);
+  if (meta.durationMs === null) return undefined;
+  return String(Date.now() - meta.durationMs);
+}
+
+function useTimeRange(): [TimeRangeId, (id: TimeRangeId) => void] {
+  const [range, setRange] = useState<TimeRangeId>(() => {
+    if (typeof window === "undefined") return "all";
+    const stored = window.localStorage.getItem(TIME_RANGE_STORAGE_KEY);
+    if (stored && TIME_RANGES.some((item) => item.id === stored)) return stored as TimeRangeId;
+    return "all";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(TIME_RANGE_STORAGE_KEY, range);
+    }
+  }, [range]);
+  return [range, setRange];
+}
 
 type ThemeMode = "light" | "dark" | "system";
 const THEME_STORAGE_KEY = "otlp-theme";
@@ -76,68 +143,87 @@ function useTheme(): [ThemeMode, (mode: ThemeMode) => void] {
 }
 
 export function App() {
-  const [activePage, setActivePage] = useState<PageKey>("Traces");
+  const [activePage, setActivePage] = useState<PageKey>("Resources");
   const [selectedTraceId, setSelectedTraceId] = useState("");
   const [selectedSpanId, setSelectedSpanId] = useState("");
-  const [selectedMetricName, setSelectedMetricName] = useState("");
+  const [selectedMetricKey, setSelectedMetricKey] = useState("");
   const [service, setService] = useState("");
   const [query, setQuery] = useState("");
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [severity, setSeverity] = useState("");
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [paused, setPaused] = useState(false);
   const [themeMode, setThemeMode] = useTheme();
+  const [timeRange, setTimeRange] = useTimeRange();
 
-  const refetchInterval = autoRefresh ? REFRESH_INTERVAL_MS : false;
+  const queryClient = useQueryClient();
+  const refetchInterval = paused ? false : REFRESH_INTERVAL_MS;
 
   const health = useQuery({ queryKey: ["health"], queryFn: getHealth, refetchInterval });
   const resources = useQuery({ queryKey: ["resources"], queryFn: listResources, refetchInterval });
   const traces = useQuery({
-    queryKey: ["traces", service, query, errorsOnly],
-    queryFn: () => listTraces({ service: service || undefined, q: query || undefined, hasError: errorsOnly ? true : undefined }),
+    queryKey: ["traces", service, query, errorsOnly, timeRange],
+    queryFn: () => listTraces({
+      service: service || undefined,
+      q: query || undefined,
+      hasError: errorsOnly ? true : undefined,
+      from: computeFromMillis(timeRange)
+    }),
     refetchInterval
   });
   const selectedTrace = useQuery({
     queryKey: ["trace", selectedTraceId],
     queryFn: () => getTrace(selectedTraceId),
     enabled: Boolean(selectedTraceId),
-    refetchInterval: selectedTraceId ? refetchInterval : false
+    refetchInterval: selectedTraceId && !paused ? REFRESH_INTERVAL_MS : false
   });
   const logs = useQuery({
-    queryKey: ["logs", service, activePage === "Traces" ? selectedTraceId : "", query, severity],
+    queryKey: ["logs", service, query, timeRange],
     queryFn: () => listLogs({
       service: service || undefined,
-      traceId: activePage === "Traces" ? selectedTraceId || undefined : undefined,
-      q: query || undefined
+      q: query || undefined,
+      from: computeFromMillis(timeRange)
     }),
     refetchInterval
   });
   const metrics = useQuery({
-    queryKey: ["metrics", service, query],
-    queryFn: () => listMetrics({ service: service || undefined, q: query || undefined }),
+    queryKey: ["metrics", service, query, timeRange],
+    queryFn: () => listMetrics({
+      service: service || undefined,
+      q: query || undefined,
+      from: computeFromMillis(timeRange)
+    }),
     refetchInterval
   });
   const selectedMetricSeries = useQuery({
-    queryKey: ["metric-series", selectedMetricName, service],
-    queryFn: () => getMetricSeries(selectedMetricName, service || undefined),
-    enabled: Boolean(selectedMetricName),
-    refetchInterval: selectedMetricName ? refetchInterval : false
+    queryKey: ["metric-series", selectedMetricKey, service, timeRange],
+    queryFn: () => {
+      const [, , metricName] = selectedMetricKey.split("\u0000");
+      return getMetricSeries(metricName ?? "", service || undefined, { from: computeFromMillis(timeRange) });
+    },
+    enabled: Boolean(selectedMetricKey),
+    refetchInterval: selectedMetricKey && !paused ? REFRESH_INTERVAL_MS : false
   });
 
-  useEffect(() => {
-    if (!selectedTraceId && traces.data?.[0]) {
-      setSelectedTraceId(traces.data[0].traceId);
+  const clearData = useMutation({
+    mutationFn: clearAllData,
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+      setSelectedTraceId("");
+      setSelectedSpanId("");
+      setSelectedMetricKey("");
     }
-  }, [selectedTraceId, traces.data]);
-
-  useEffect(() => {
-    if (!selectedMetricName && metrics.data?.[0]) {
-      setSelectedMetricName(metrics.data[0].metricName);
-    }
-  }, [metrics.data, selectedMetricName]);
+  });
 
   useEffect(() => {
     setSelectedSpanId("");
   }, [selectedTraceId]);
+
+  useEffect(() => {
+    if (!selectedMetricKey && metrics.data?.[0]) {
+      const m = metrics.data[0];
+      setSelectedMetricKey(`${m.serviceName}\u0000${m.meterName}\u0000${m.metricName}`);
+    }
+  }, [metrics.data, selectedMetricKey]);
 
   const serviceNames = useMemo(() => resources.data?.map((item) => item.serviceName) ?? [], [resources.data]);
   const trace = selectedTrace.data;
@@ -147,7 +233,9 @@ export function App() {
     return items.filter((log) => (log.severityText ?? "INFO").toLowerCase().includes(severity.toLowerCase()));
   }, [logs.data, severity]);
   const genAiTraces = useMemo(() => (traces.data ?? []).filter((item) => item.genAiSpanCount > 0), [traces.data]);
-  const hideFilters = PAGES_WITHOUT_FILTERS.includes(activePage);
+
+  const pageMeta = currentPageMeta(activePage);
+  const showTraceDetail = activePage === "Traces" && Boolean(selectedTraceId);
 
   return (
     <div className="app-shell">
@@ -157,16 +245,19 @@ export function App() {
             <Activity size={18} />
           </div>
           <div>
-            <strong>OTLP Workbench</strong>
+            <strong>OTel Workbench</strong>
             <span>local telemetry</span>
           </div>
         </div>
         <nav className="nav-list" aria-label="Primary">
           {nav.map((item) => (
             <button
-              className={activePage === item.label ? "nav-item active" : "nav-item"}
-              key={item.label}
-              onClick={() => setActivePage(item.label)}
+              className={activePage === item.id ? "nav-item active" : "nav-item"}
+              key={item.id}
+              onClick={() => {
+                setActivePage(item.id);
+                setSelectedTraceId("");
+              }}
               title={item.hint}
             >
               <item.icon size={16} />
@@ -174,129 +265,222 @@ export function App() {
             </button>
           ))}
         </nav>
-        <ThemeSwitch mode={themeMode} onChange={setThemeMode} />
-        <div className="endpoint-card">
-          <span className="label">OTLP endpoints</span>
-          <code>http://localhost:4318</code>
-          <code>grpc://localhost:4317</code>
-          <span className="muted">/v1/traces · /v1/logs · /v1/metrics</span>
+        <div className="sidebar-footer">
+          <div className="endpoint-card">
+            <span className="label">OTLP endpoints</span>
+            <code>http://localhost:4318</code>
+            <code>grpc://localhost:4317</code>
+          </div>
         </div>
       </aside>
 
       <main className="workspace">
-        <header className="topbar">
-          {!hideFilters && (
-            <>
-              <div className="toolbar-group search-box">
-                <Search size={16} />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder={searchPlaceholder(activePage)}
-                />
-              </div>
-              <div className="toolbar-group">
-                <Server size={16} />
-                <select value={service} onChange={(event) => setService(event.target.value)}>
-                  <option value="">All services</option>
-                  {serviceNames.map((item) => (
-                    <option value={item} key={item}>{item}</option>
-                  ))}
-                </select>
-              </div>
-              {activePage === "Traces" || activePage === "GenAI" ? (
-                <button className={errorsOnly ? "toggle active" : "toggle"} onClick={() => setErrorsOnly((value) => !value)} title="Show traces with errors only">
-                  <AlertCircle size={16} />
-                  Errors
-                </button>
-              ) : null}
-              {activePage === "Logs" ? (
-                <div className="toolbar-group">
-                  <AlertCircle size={16} />
-                  <select value={severity} onChange={(event) => setSeverity(event.target.value)}>
-                    <option value="">All severities</option>
-                    <option value="error">Error</option>
-                    <option value="warn">Warn</option>
-                    <option value="info">Info</option>
-                    <option value="debug">Debug</option>
-                  </select>
-                </div>
-              ) : null}
-            </>
-          )}
-          <div className="status-strip">
-            <StatusItem icon={Radio} label="ingest" value={health.data?.ok ? "ready" : "checking"} tone={health.data?.ok ? "ok" : "muted"} />
-            <StatusItem icon={Database} label="storage" value={health.data?.storage ?? "memory"} />
+        <header className="page-header">
+          <div className="page-title-group">
+            {showTraceDetail ? (
+              <button className="back-button" onClick={() => setSelectedTraceId("")} title="Back to traces">
+                <ArrowLeft size={14} />
+                <span>Traces</span>
+              </button>
+            ) : null}
+            <div className="page-title">
+              <pageMeta.icon size={18} />
+              <h1>{showTraceDetail ? trace?.rootName ?? "Trace detail" : pageMeta.title}</h1>
+              <span className="page-subtitle">{pageMeta.subtitle}</span>
+            </div>
+          </div>
+          <div className="page-actions">
+            <TimeRangeMenu value={timeRange} onChange={setTimeRange} />
             <button
-              className={autoRefresh ? "status-item toggle-pill active" : "status-item toggle-pill"}
-              onClick={() => setAutoRefresh((value) => !value)}
-              title={autoRefresh ? "Pause auto-refresh" : "Resume auto-refresh"}
+              className={paused ? "icon-button active" : "icon-button"}
+              onClick={() => setPaused((value) => !value)}
+              title={paused ? "Resume refresh" : "Pause refresh"}
             >
-              {autoRefresh ? <Pause size={14} /> : <Play size={14} />}
-              <span>refresh</span>
-              <strong>{autoRefresh ? `${REFRESH_INTERVAL_MS / 1000}s` : "off"}</strong>
+              {paused ? <Play size={14} /> : <Pause size={14} />}
+              <span>{paused ? "Paused" : "Live"}</span>
             </button>
-            <StatusItem icon={Clock3} label="window" value="live" />
+            <ThemeSwitch mode={themeMode} onChange={setThemeMode} />
           </div>
         </header>
 
-        <section className="summary-row" aria-label="Telemetry summary">
-          <Metric label="Traces" value={health.data?.traces ?? 0} />
-          <Metric label="Spans" value={health.data?.spans ?? 0} />
-          <Metric label="Logs" value={health.data?.logs ?? 0} />
-          <Metric label="Metrics" value={health.data?.metrics ?? 0} />
+        {!showTraceDetail && (
+          <div className="filter-bar">
+            <FilterBar
+              page={activePage}
+              query={query}
+              onQueryChange={setQuery}
+              service={service}
+              onServiceChange={setService}
+              services={serviceNames}
+              errorsOnly={errorsOnly}
+              onErrorsOnlyChange={setErrorsOnly}
+              severity={severity}
+              onSeverityChange={setSeverity}
+              onClear={() => clearData.mutate()}
+              clearing={clearData.isPending}
+            />
+          </div>
+        )}
+
+        <section className="page-content">
+          {activePage === "Resources" ? (
+            <ResourcesPage
+              resources={resources.data ?? []}
+              loading={resources.isLoading}
+              onOpenLogs={(name) => {
+                setService(name);
+                setActivePage("Logs");
+              }}
+              onOpenTraces={(name) => {
+                setService(name);
+                setActivePage("Traces");
+              }}
+              onOpenMetrics={(name) => {
+                setService(name);
+                setActivePage("Metrics");
+              }}
+            />
+          ) : activePage === "Logs" ? (
+            <LogsPage logs={filteredLogs} loading={logs.isLoading} onOpenTrace={(traceId) => {
+              setSelectedTraceId(traceId);
+              setActivePage("Traces");
+            }} />
+          ) : activePage === "Traces" ? (
+            showTraceDetail ? (
+              trace ? (
+                <TraceDetailPage
+                  trace={trace}
+                  selectedSpanId={selectedSpanId}
+                  onSelectSpan={setSelectedSpanId}
+                  onOpenLogs={() => {
+                    setQuery(trace.traceId);
+                    setActivePage("Logs");
+                  }}
+                />
+              ) : (
+                <EmptyPanel icon={RotateCw} title="Loading trace…" />
+              )
+            ) : (
+              <TracesListPage
+                traces={traces.data ?? []}
+                loading={traces.isLoading}
+                onSelect={(id) => setSelectedTraceId(id)}
+              />
+            )
+          ) : activePage === "Metrics" ? (
+            <MetricsPage
+              metrics={metrics.data ?? []}
+              selectedMetricKey={selectedMetricKey}
+              onSelect={setSelectedMetricKey}
+              series={selectedMetricSeries.data ?? []}
+              loading={metrics.isLoading}
+            />
+          ) : activePage === "GenAI" ? (
+            <GenAiPage
+              traces={genAiTraces}
+              selectedTraceId={selectedTraceId}
+              onSelect={setSelectedTraceId}
+              trace={trace}
+              loading={traces.isLoading}
+            />
+          ) : (
+            <SettingsPage health={health.data} />
+          )}
         </section>
 
-        {activePage === "Traces" ? (
-          <TracesPage
-            traces={traces.data ?? []}
-            tracesLoading={traces.isLoading}
-            trace={trace}
-            selectedTraceId={selectedTraceId}
-            selectedSpanId={selectedSpanId}
-            onSelectTrace={setSelectedTraceId}
-            onSelectSpan={setSelectedSpanId}
-            logs={filteredLogs}
-          />
-        ) : activePage === "Logs" ? (
-          <LogsPage logs={filteredLogs} loading={logs.isLoading} />
-        ) : activePage === "Metrics" ? (
-          <MetricsView
-            metrics={metrics.data ?? []}
-            selectedMetricName={selectedMetricName}
-            onSelect={setSelectedMetricName}
-            series={selectedMetricSeries.data ?? []}
-            loading={metrics.isLoading}
-          />
-        ) : activePage === "GenAI" ? (
-          <GenAiPage
-            traces={genAiTraces}
-            selectedTraceId={selectedTraceId}
-            onSelect={setSelectedTraceId}
-            trace={trace}
-            loading={traces.isLoading}
-          />
-        ) : activePage === "Resources" ? (
-          <ResourcesPage resources={resources.data ?? []} loading={resources.isLoading} />
-        ) : (
-          <SettingsPage health={health.data} />
-        )}
+        <footer className="status-bar">
+          <StatusChip icon={Radio} label="ingest" value={health.data?.ok ? "ready" : "offline"} tone={health.data?.ok ? "ok" : "warn"} />
+          <StatusChip icon={Database} label="storage" value={health.data?.storage ?? "memory"} />
+          <span className="status-divider" />
+          <StatusChip icon={Boxes} label="resources" value={(resources.data?.length ?? 0).toLocaleString()} />
+          <StatusChip icon={GitBranch} label="traces" value={(health.data?.traces ?? 0).toLocaleString()} />
+          <StatusChip icon={CircleDot} label="spans" value={(health.data?.spans ?? 0).toLocaleString()} />
+          <StatusChip icon={FileText} label="logs" value={(health.data?.logs ?? 0).toLocaleString()} />
+          <StatusChip icon={Gauge} label="metrics" value={(health.data?.metrics ?? 0).toLocaleString()} />
+          <span className="status-spacer" />
+          <StatusChip icon={Timer} label="window" value={timeRangeMeta(timeRange).label.replace(/^Last /, "")} tone="muted" />
+          <StatusChip icon={Clock3} label={paused ? "paused" : "refresh"} value={paused ? "off" : `${REFRESH_INTERVAL_MS / 1000}s`} tone={paused ? "warn" : "muted"} />
+        </footer>
       </main>
     </div>
   );
 }
 
-function searchPlaceholder(page: PageKey) {
+function currentPageMeta(page: PageKey): { title: string; subtitle: string; icon: typeof GitBranch } {
   switch (page) {
+    case "Resources":
+      return { title: "Resources", subtitle: "Reporting services", icon: PanelsTopLeft };
     case "Logs":
-      return "Search log body or attributes";
+      return { title: "Structured logs", subtitle: "Semantic log stream", icon: FileText };
+    case "Traces":
+      return { title: "Traces", subtitle: "Distributed traces", icon: GitBranch };
     case "Metrics":
-      return "Search metric name or meter";
+      return { title: "Metrics", subtitle: "OTLP instruments", icon: Gauge };
     case "GenAI":
-      return "Search prompt, model or tool";
-    default:
-      return "Search traceId, span or log body";
+      return { title: "GenAI", subtitle: "LLM & agent timelines", icon: Sparkles };
+    case "Settings":
+      return { title: "Settings", subtitle: "Endpoints & storage", icon: SettingsIcon };
   }
+}
+
+function TimeRangeMenu({ value, onChange }: { value: TimeRangeId; onChange(value: TimeRangeId): void }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const meta = timeRangeMeta(value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocumentClick = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocumentClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocumentClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="time-range" ref={containerRef}>
+      <button
+        type="button"
+        className={open ? "icon-button time-range-trigger open" : "icon-button time-range-trigger"}
+        onClick={() => setOpen((value) => !value)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="Time range"
+      >
+        <Timer size={14} />
+        <span>{meta.label}</span>
+        <ChevronDown size={12} />
+      </button>
+      {open ? (
+        <div className="time-range-menu" role="listbox">
+          {TIME_RANGES.map((item) => (
+            <button
+              key={item.id}
+              role="option"
+              aria-selected={item.id === value}
+              className={item.id === value ? "time-range-option active" : "time-range-option"}
+              onClick={() => {
+                onChange(item.id);
+                setOpen(false);
+              }}
+            >
+              <span>{item.label}</span>
+              {item.id === value ? <Check size={13} /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function ThemeSwitch({ mode, onChange }: { mode: ThemeMode; onChange(mode: ThemeMode): void }) {
@@ -316,294 +500,364 @@ function ThemeSwitch({ mode, onChange }: { mode: ThemeMode; onChange(mode: Theme
           aria-pressed={mode === option.id}
           title={`${option.label} theme`}
         >
-          <option.icon size={14} />
-          <span>{option.label}</span>
+          <option.icon size={13} />
         </button>
       ))}
     </div>
   );
 }
 
-function StatusItem({ icon: Icon, label, value, tone }: { icon: typeof Radio; label: string; value: string; tone?: "ok" | "muted" }) {
-  const className = tone === "ok" ? "status-item status-ok-tone" : tone === "muted" ? "status-item status-muted-tone" : "status-item";
+function StatusChip({ icon: Icon, label, value, tone }: { icon: typeof Radio; label: string; value: string; tone?: "ok" | "warn" | "muted" }) {
+  return (
+    <span className={`status-chip${tone ? ` tone-${tone}` : ""}`}>
+      <Icon size={12} />
+      <span className="status-chip-label">{label}</span>
+      <strong>{value}</strong>
+    </span>
+  );
+}
+
+function FilterBar({
+  page,
+  query,
+  onQueryChange,
+  service,
+  onServiceChange,
+  services,
+  errorsOnly,
+  onErrorsOnlyChange,
+  severity,
+  onSeverityChange,
+  onClear,
+  clearing
+}: {
+  page: PageKey;
+  query: string;
+  onQueryChange(value: string): void;
+  service: string;
+  onServiceChange(value: string): void;
+  services: string[];
+  errorsOnly: boolean;
+  onErrorsOnlyChange(value: boolean): void;
+  severity: string;
+  onSeverityChange(value: string): void;
+  onClear(): void;
+  clearing: boolean;
+}) {
+  const showFilters = page !== "Settings" && page !== "Resources";
+  return (
+    <div className="filter-bar-inner">
+      {showFilters ? (
+        <>
+          <div className="filter-search">
+            <Search size={14} />
+            <input
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder={searchPlaceholder(page)}
+            />
+          </div>
+          <div className="filter-select">
+            <Server size={14} />
+            <select value={service} onChange={(event) => onServiceChange(event.target.value)}>
+              <option value="">All resources</option>
+              {services.map((item) => (
+                <option value={item} key={item}>{item}</option>
+              ))}
+            </select>
+            <ChevronDown size={12} />
+          </div>
+          {page === "Logs" ? (
+            <div className="filter-select">
+              <AlertCircle size={14} />
+              <select value={severity} onChange={(event) => onSeverityChange(event.target.value)}>
+                <option value="">All levels</option>
+                <option value="error">Error</option>
+                <option value="warn">Warn</option>
+                <option value="info">Info</option>
+                <option value="debug">Debug</option>
+              </select>
+              <ChevronDown size={12} />
+            </div>
+          ) : null}
+          {page === "Traces" || page === "GenAI" ? (
+            <button className={errorsOnly ? "chip-toggle active" : "chip-toggle"} onClick={() => onErrorsOnlyChange(!errorsOnly)}>
+              <AlertTriangle size={13} />
+              Errors only
+            </button>
+          ) : null}
+        </>
+      ) : (
+        <div className="filter-placeholder">
+          {page === "Resources" ? "All telemetry-reporting resources" : "Local OTel workbench settings"}
+        </div>
+      )}
+      <div className="filter-actions">
+        <button className="ghost-button danger" onClick={onClear} disabled={clearing} title="Clear all telemetry">
+          <Eraser size={13} />
+          <span>{clearing ? "Clearing…" : "Clear data"}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function searchPlaceholder(page: PageKey) {
+  switch (page) {
+    case "Logs":
+      return "Filter logs by message, traceId or attribute";
+    case "Metrics":
+      return "Filter metric or meter name";
+    case "GenAI":
+      return "Search prompt, model or tool";
+    case "Traces":
+      return "Filter by trace name, span or traceId";
+    default:
+      return "Filter";
+  }
+}
+
+function ResourcesPage({ resources, loading, onOpenLogs, onOpenTraces, onOpenMetrics }: {
+  resources: Array<{ serviceName: string; spanCount: number; logCount: number; lastSeen: number }>;
+  loading: boolean;
+  onOpenLogs(name: string): void;
+  onOpenTraces(name: string): void;
+  onOpenMetrics(name: string): void;
+}) {
+  if (loading && resources.length === 0) {
+    return <EmptyPanel icon={RotateCw} title="Loading resources…" />;
+  }
+  if (resources.length === 0) {
+    return <EmptyPanel icon={Server} title="No resources yet" body={<>Send a span or log to <code>localhost:4318</code> and the reporting resource will appear here.</>} />;
+  }
+  return (
+    <div className="panel data-grid resources-grid">
+      <div className="data-row data-head resources-row">
+        <span>Name</span>
+        <span>State</span>
+        <span>Spans</span>
+        <span>Logs</span>
+        <span>Last seen</span>
+        <span>Actions</span>
+      </div>
+      {resources.map((item) => {
+        const state = resourceState(item.lastSeen);
+        return (
+          <div className="data-row resources-row" key={item.serviceName}>
+            <span className="resource-name">
+              <span className="resource-avatar">{item.serviceName.slice(0, 2).toUpperCase()}</span>
+              <span className="resource-name-text">
+                <strong>{item.serviceName}</strong>
+                <code>service</code>
+              </span>
+            </span>
+            <span>
+              <StatePill state={state} />
+            </span>
+            <span className="num">{item.spanCount.toLocaleString()}</span>
+            <span className="num">{item.logCount.toLocaleString()}</span>
+            <span className="muted">{formatRelative(item.lastSeen)}</span>
+            <span className="row-actions">
+              <button className="ghost-button" onClick={() => onOpenLogs(item.serviceName)} title="View logs">
+                <FileText size={13} />
+              </button>
+              <button className="ghost-button" onClick={() => onOpenTraces(item.serviceName)} title="View traces">
+                <GitBranch size={13} />
+              </button>
+              <button className="ghost-button" onClick={() => onOpenMetrics(item.serviceName)} title="View metrics">
+                <Gauge size={13} />
+              </button>
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function resourceState(lastSeen: number): "running" | "idle" | "stale" {
+  if (!lastSeen) return "stale";
+  const diff = Date.now() - lastSeen;
+  if (diff < STALE_THRESHOLD_MS) return "running";
+  if (diff < STALE_THRESHOLD_MS * 4) return "idle";
+  return "stale";
+}
+
+function StatePill({ state }: { state: "running" | "idle" | "stale" }) {
+  const label = state === "running" ? "Running" : state === "idle" ? "Idle" : "Stale";
+  return (
+    <span className={`state-pill state-${state}`}>
+      <span className="state-dot" />
+      {label}
+    </span>
+  );
+}
+
+function LogsPage({ logs, loading, onOpenTrace }: { logs: LogRecord[]; loading: boolean; onOpenTrace(traceId: string): void }) {
+  if (loading && logs.length === 0) {
+    return <EmptyPanel icon={RotateCw} title="Loading structured logs…" />;
+  }
+  if (logs.length === 0) {
+    return <EmptyPanel icon={FileText} title="No structured logs" body={<>Emit logs to <code>localhost:4318/v1/logs</code> to see them here.</>} />;
+  }
+  return (
+    <div className="panel data-grid logs-grid">
+      <div className="data-row data-head logs-row">
+        <span>Resource</span>
+        <span>Level</span>
+        <span>Timestamp</span>
+        <span>Message</span>
+        <span>Trace</span>
+      </div>
+      {logs.map((log) => (
+        <div className="data-row logs-row" key={log.id}>
+          <span className="cell-strong">{log.serviceName}</span>
+          <span>
+            <span className={severityClass(log.severityText)}>{(log.severityText ?? "INFO").toUpperCase()}</span>
+          </span>
+          <span className="muted mono">{formatTimestamp(log.timeUnixNano ?? log.observedTimeUnixNano)}</span>
+          <span className="cell-message" title={log.bodyText ?? ""}>
+            {log.bodyText ?? JSON.stringify(log.bodyJson ?? log.attributes)}
+          </span>
+          <span>
+            {log.traceId ? (
+              <button className="link-button" onClick={() => onOpenTrace(log.traceId!)} title="Open trace">
+                <GitBranch size={12} />
+                <code>{shortId(log.traceId)}</code>
+              </button>
+            ) : (
+              <span className="muted">—</span>
+            )}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TracesListPage({ traces, loading, onSelect }: { traces: TraceSummary[]; loading: boolean; onSelect(id: string): void }) {
+  const maxDuration = useMemo(() => Math.max(1, ...traces.map((t) => t.durationNano)), [traces]);
+  if (loading && traces.length === 0) {
+    return <EmptyPanel icon={RotateCw} title="Loading traces…" />;
+  }
+  if (traces.length === 0) {
+    return <EmptyPanel icon={GitBranch} title="No traces yet" body={<>Send a span to <code>localhost:4318/v1/traces</code> to populate the list.</>} />;
+  }
+  return (
+    <div className="panel data-grid traces-grid">
+      <div className="data-row data-head traces-row">
+        <span>Timestamp</span>
+        <span>Name</span>
+        <span>Resources</span>
+        <span>Spans</span>
+        <span>Duration</span>
+        <span>Errors</span>
+      </div>
+      {traces.map((trace) => {
+        const portion = trace.durationNano / maxDuration;
+        return (
+          <button
+            className="data-row traces-row clickable"
+            key={trace.traceId}
+            onClick={() => onSelect(trace.traceId)}
+          >
+            <span className="muted mono">{formatTimestamp(trace.startTimeUnixNano)}</span>
+            <span className="cell-strong">
+              <strong>
+                {trace.rootName}
+                {trace.genAiSpanCount > 0 ? (
+                  <Sparkles size={12} className="genai-star" aria-label={`${trace.genAiSpanCount} GenAI spans`} />
+                ) : null}
+              </strong>
+              <code>{shortId(trace.traceId)}</code>
+            </span>
+            <span className="resource-tags">
+              {trace.serviceNames.slice(0, 3).map((name, index) => (
+                <span key={name} className={`service-tag service-color-${index % 6}`}>{name}</span>
+              ))}
+              {trace.serviceNames.length > 3 ? <span className="service-tag">+{trace.serviceNames.length - 3}</span> : null}
+            </span>
+            <span className="num">{trace.spanCount}</span>
+            <span className="duration-cell">
+              <DurationRadial portion={portion} />
+              <span>{formatDuration(trace.durationNano)}</span>
+            </span>
+            <span>
+              {trace.errorCount ? (
+                <span className="error-badge">
+                  <AlertTriangle size={12} />
+                  {trace.errorCount}
+                </span>
+              ) : (
+                <span className="muted">—</span>
+              )}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DurationRadial({ portion }: { portion: number }) {
+  const ratio = Math.max(0.04, Math.min(1, portion));
+  return (
+    <span className="duration-radial" style={{ "--ratio": `${ratio * 100}%` } as React.CSSProperties} aria-hidden />
+  );
+}
+
+function TraceDetailPage({ trace, selectedSpanId, onSelectSpan, onOpenLogs }: {
+  trace: TraceDetail;
+  selectedSpanId: string;
+  onSelectSpan(spanId: string): void;
+  onOpenLogs(): void;
+}) {
+  const depth = useMemo(() => {
+    const map = computeDepth(trace.spans);
+    let max = 0;
+    map.forEach((value) => { if (value > max) max = value; });
+    return max + 1;
+  }, [trace.spans]);
+  const resourceCount = useMemo(() => new Set(trace.spans.map((s) => s.serviceName)).size, [trace.spans]);
+  const genAiSpanIds = useMemo(() => new Set(trace.genAi.spans.map((span) => span.spanId)), [trace.genAi.spans]);
+  return (
+    <div className="trace-detail">
+      <div className="trace-info-bar">
+        <InfoCell label="Trace ID" value={<code>{shortId(trace.traceId)}</code>} />
+        <InfoCell label="Duration" value={formatDuration(trace.durationNano)} />
+        <InfoCell label="Resources" value={resourceCount.toString()} />
+        <InfoCell label="Depth" value={depth.toString()} />
+        <InfoCell label="Total spans" value={trace.spanCount.toString()} />
+        <InfoCell label="GenAI spans" value={trace.genAi.spans.length.toString()} tone={trace.genAi.spans.length ? "accent" : undefined} />
+        <InfoCell label="Errors" value={(trace.errorCount || 0).toString()} tone={trace.errorCount ? "warn" : undefined} />
+        <span className="trace-info-actions">
+          <button className="ghost-button" onClick={onOpenLogs}>
+            <FileText size={13} />
+            <span>View logs</span>
+          </button>
+        </span>
+      </div>
+      <div className="panel trace-waterfall-panel">
+        <TraceWaterfall spans={trace.spans} selectedSpanId={selectedSpanId} onSelect={onSelectSpan} genAiSpanIds={genAiSpanIds} />
+      </div>
+      <div className="panel span-detail-panel">
+        <SpanDetails trace={trace} selectedSpanId={selectedSpanId} genAiSpanIds={genAiSpanIds} />
+      </div>
+    </div>
+  );
+}
+
+function InfoCell({ label, value, tone }: { label: string; value: React.ReactNode; tone?: "warn" | "accent" | undefined }) {
+  const className = tone === "warn" ? "info-cell tone-warn" : tone === "accent" ? "info-cell tone-accent" : "info-cell";
   return (
     <div className={className}>
-      <Icon size={14} />
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value.toLocaleString()}</strong>
-    </div>
-  );
-}
-
-function PanelHeader({ icon: Icon, title, meta }: { icon: typeof FileText; title: string; meta: string }) {
-  return (
-    <div className="panel-header">
-      <div>
-        <Icon size={16} />
-        <strong>{title}</strong>
-      </div>
-      <span>{meta}</span>
-    </div>
-  );
-}
-
-function TracesPage({ traces, tracesLoading, trace, selectedTraceId, selectedSpanId, onSelectTrace, onSelectSpan, logs }: {
-  traces: TraceSummary[];
-  tracesLoading: boolean;
-  trace: TraceDetail | undefined;
-  selectedTraceId: string;
-  selectedSpanId: string;
-  onSelectTrace(traceId: string): void;
-  onSelectSpan(spanId: string): void;
-  logs: LogRecord[];
-}) {
-  return (
-    <section className="content-grid">
-      <div className="panel trace-list-panel">
-        <PanelHeader icon={ListFilter} title="Trace list" meta={`${traces.length} traces`} />
-        <TraceTable traces={traces} selectedTraceId={selectedTraceId} onSelect={onSelectTrace} loading={tracesLoading} />
-      </div>
-
-      <div className="panel detail-panel">
-        <PanelHeader icon={GitBranch} title={trace?.rootName ?? "Trace detail"} meta={trace ? `${trace.spanCount} spans · ${shortId(trace.traceId)}` : "no trace"} />
-        {trace ? (
-          <div className="detail-layout">
-            <TraceWaterfall spans={trace.spans} selectedSpanId={selectedSpanId} onSelect={onSelectSpan} />
-            <SpanInspector spans={trace.spans} selectedSpanId={selectedSpanId} />
-          </div>
-        ) : (
-          <EmptyState scope="trace" />
-        )}
-      </div>
-
-      <div className="panel logs-panel">
-        <PanelHeader icon={FileText} title="Correlated logs" meta={`${logs.length} rows`} />
-        <LogTable logs={logs} compact />
-      </div>
-
-      <div className="panel genai-panel">
-        <PanelHeader icon={Sparkles} title="GenAI summary" meta={trace?.genAi.spans.length ? `${trace.genAi.spans.length} spans` : "metadata only"} />
-        {trace?.genAi.spans.length ? <GenAiSummary trace={trace} /> : <GenAiEmpty />}
-      </div>
-    </section>
-  );
-}
-
-function LogsPage({ logs, loading }: { logs: LogRecord[]; loading: boolean }) {
-  return (
-    <section className="single-panel">
-      <div className="panel logs-full-panel">
-        <PanelHeader icon={FileText} title="Logs" meta={`${logs.length} rows`} />
-        {loading && logs.length === 0 ? <EmptyState scope="loading" /> : <LogTable logs={logs} />}
-      </div>
-    </section>
-  );
-}
-
-function GenAiPage({ traces, selectedTraceId, onSelect, trace, loading }: {
-  traces: TraceSummary[];
-  selectedTraceId: string;
-  onSelect(traceId: string): void;
-  trace: TraceDetail | undefined;
-  loading: boolean;
-}) {
-  return (
-    <section className="content-grid genai-grid">
-      <div className="panel trace-list-panel">
-        <PanelHeader icon={Sparkles} title="GenAI traces" meta={`${traces.length} traces`} />
-        {traces.length === 0 ? (
-          <EmptyState scope={loading ? "loading" : "genai"} />
-        ) : (
-          <div className="table trace-table">
-            <div className="table-row table-head">
-              <span>Root span</span>
-              <span>Service</span>
-              <span>Tokens</span>
-              <span>Spans</span>
-            </div>
-            {traces.map((item) => (
-              <button
-                key={item.traceId}
-                className={item.traceId === selectedTraceId ? "table-row active" : "table-row"}
-                onClick={() => onSelect(item.traceId)}
-              >
-                <span>
-                  <strong>{item.rootName}</strong>
-                  <code>{shortId(item.traceId)}</code>
-                </span>
-                <span>{item.serviceNames.join(", ")}</span>
-                <span>{(item.inputTokens ?? 0) + (item.outputTokens ?? 0)}</span>
-                <span>{item.genAiSpanCount}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="panel detail-panel">
-        <PanelHeader icon={Sparkles} title={trace?.rootName ?? "Agent timeline"} meta={trace ? `${trace.genAi.toolCallCount} tools · ${trace.genAi.totalTokens ?? 0} tokens` : "no trace"} />
-        {trace?.genAi.spans.length ? <GenAiSummary trace={trace} /> : <GenAiEmpty />}
-      </div>
-    </section>
-  );
-}
-
-function ResourcesPage({ resources, loading }: { resources: Array<{ serviceName: string; spanCount: number; logCount: number; lastSeen: number }>; loading: boolean }) {
-  if (loading && resources.length === 0) {
-    return (
-      <section className="single-panel">
-        <div className="panel">
-          <PanelHeader icon={Server} title="Reporting services" meta="loading" />
-          <EmptyState scope="loading" />
-        </div>
-      </section>
-    );
-  }
-  if (resources.length === 0) {
-    return (
-      <section className="single-panel">
-        <div className="panel">
-          <PanelHeader icon={Server} title="Reporting services" meta="0" />
-          <EmptyState scope="resources" />
-        </div>
-      </section>
-    );
-  }
-  return (
-    <section className="resources-grid">
-      {resources.map((item) => (
-        <div className="resource-card" key={item.serviceName}>
-          <div className="resource-head">
-            <div className="resource-avatar">{item.serviceName.slice(0, 2).toUpperCase()}</div>
-            <div>
-              <strong>{item.serviceName}</strong>
-              <span>last seen {formatRelative(item.lastSeen)}</span>
-            </div>
-          </div>
-          <div className="resource-stats">
-            <div>
-              <span>Spans</span>
-              <strong>{item.spanCount.toLocaleString()}</strong>
-            </div>
-            <div>
-              <span>Logs</span>
-              <strong>{item.logCount.toLocaleString()}</strong>
-            </div>
-          </div>
-        </div>
-      ))}
-    </section>
-  );
-}
-
-function SettingsPage({ health }: { health: import("./api.js").Health | undefined }) {
-  const endpoints = [
-    { label: "Dashboard", value: "http://localhost:18888" },
-    { label: "OTLP/HTTP", value: "http://localhost:4318" },
-    { label: "OTLP/gRPC", value: "grpc://localhost:4317" }
-  ];
-  return (
-    <section className="settings-grid">
-      <div className="panel">
-        <PanelHeader icon={Server} title="Endpoints" meta={health?.ok ? "online" : "offline"} />
-        <div className="settings-list">
-          {endpoints.map((item) => (
-            <div className="settings-row" key={item.label}>
-              <span>{item.label}</span>
-              <code>{item.value}</code>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="panel">
-        <PanelHeader icon={Database} title="Storage" meta={health?.storage ?? "memory"} />
-        <div className="settings-list">
-          <div className="settings-row">
-            <span>Traces</span>
-            <strong>{(health?.traces ?? 0).toLocaleString()}</strong>
-          </div>
-          <div className="settings-row">
-            <span>Spans</span>
-            <strong>{(health?.spans ?? 0).toLocaleString()}</strong>
-          </div>
-          <div className="settings-row">
-            <span>Logs</span>
-            <strong>{(health?.logs ?? 0).toLocaleString()}</strong>
-          </div>
-          <div className="settings-row">
-            <span>Metrics points</span>
-            <strong>{(health?.metrics ?? 0).toLocaleString()}</strong>
-          </div>
-          <div className="settings-row">
-            <span>Raw batches</span>
-            <strong>{(health?.batches ?? 0).toLocaleString()}</strong>
-          </div>
-        </div>
-      </div>
-      <div className="panel settings-tips-panel">
-        <PanelHeader icon={Sparkles} title="Quick tips" meta="cli" />
-        <div className="settings-list">
-          <div className="settings-row">
-            <span>Send sample</span>
-            <code>./examples/otlp-json-smoke.sh</code>
-          </div>
-          <div className="settings-row">
-            <span>Clear data</span>
-            <code>pnpm --filter @devdash/cli start -- clear</code>
-          </div>
-          <div className="settings-row">
-            <span>Export</span>
-            <code>pnpm --filter @devdash/cli start -- export --out ./telemetry.json</code>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function TraceTable({ traces, selectedTraceId, onSelect, loading }: { traces: TraceSummary[]; selectedTraceId: string; onSelect(traceId: string): void; loading: boolean }) {
-  const virtual = useVirtualRows(traces, 48);
-  if (traces.length === 0) {
-    return <EmptyState scope={loading ? "loading" : "traces"} />;
-  }
-  return (
-    <div className="table trace-table" ref={virtual.ref}>
-      <div className="table-row table-head">
-        <span>Root span</span>
-        <span>Service</span>
-        <span>Duration</span>
-        <span>Status</span>
-      </div>
-      <div className="virtual-spacer" style={{ height: virtual.top }} />
-      {virtual.rows.map(({ item: trace }) => (
-        <button
-          className={trace.traceId === selectedTraceId ? "table-row active" : "table-row"}
-          key={trace.traceId}
-          onClick={() => onSelect(trace.traceId)}
-        >
-          <span>
-            <strong>{trace.rootName}</strong>
-            <code>{shortId(trace.traceId)}</code>
-          </span>
-          <span>{trace.serviceNames.join(", ")}</span>
-          <span>{formatDuration(trace.durationNano)}</span>
-          <span className={trace.errorCount ? "status-error" : "status-ok"}>{trace.errorCount ? `${trace.errorCount} errors` : "ok"}</span>
-        </button>
-      ))}
-      <div className="virtual-spacer" style={{ height: virtual.bottom }} />
-    </div>
-  );
-}
-
-function TraceWaterfall({ spans, selectedSpanId, onSelect }: { spans: Span[]; selectedSpanId: string; onSelect(spanId: string): void }) {
+function TraceWaterfall({ spans, selectedSpanId, onSelect, genAiSpanIds }: { spans: Span[]; selectedSpanId: string; onSelect(spanId: string): void; genAiSpanIds: Set<string> }) {
   const min = Math.min(...spans.map((span) => Number(span.startTimeUnixNano)));
   const max = Math.max(...spans.map((span) => Number(span.endTimeUnixNano)));
   const total = Math.max(1, max - min);
@@ -618,6 +872,7 @@ function TraceWaterfall({ spans, selectedSpanId, onSelect }: { spans: Span[]; se
         const depth = depthBySpanId.get(span.spanId) ?? 0;
         const colorIndex = services.indexOf(span.serviceName);
         const isError = (span.statusCode ?? 0) >= 2;
+        const isGenAi = genAiSpanIds.has(span.spanId);
         const active = span.spanId === selectedSpanId;
         return (
           <button
@@ -626,9 +881,12 @@ function TraceWaterfall({ spans, selectedSpanId, onSelect }: { spans: Span[]; se
             onClick={() => onSelect(span.spanId)}
             title={`${span.serviceName} · ${span.name}`}
           >
-            <span className="span-name" style={{ paddingLeft: depth * 12 }}>
+            <span className="span-name" style={{ paddingLeft: depth * 14 }}>
               <span className={`service-dot service-color-${colorIndex % 6}`} aria-hidden />
-              {span.name}
+              <strong>{span.name}</strong>
+              {isGenAi ? <Sparkles size={11} className="genai-star" aria-label="GenAI span" /> : null}
+              <code>{span.serviceName}</code>
+              {isError ? <AlertTriangle size={12} className="span-error-icon" /> : null}
             </span>
             <div className="bar-track">
               <div
@@ -664,90 +922,327 @@ function computeDepth(spans: Span[]): Map<string, number> {
   return cache;
 }
 
-function SpanInspector({ spans, selectedSpanId }: { spans: Span[]; selectedSpanId: string }) {
-  const selected = spans.find((span) => span.spanId === selectedSpanId) ?? spans[0];
-  if (!selected) return null;
+type SpanDetailTab = "messages" | "properties" | "events" | "logs";
+type ConversationTurn = TraceDetail["genAi"]["conversation"][number];
+
+function SpanDetails({ trace, selectedSpanId, genAiSpanIds }: { trace: TraceDetail; selectedSpanId: string; genAiSpanIds: Set<string> }) {
+  const span = trace.spans.find((s) => s.spanId === selectedSpanId) ?? trace.spans[0];
+  const spanTurns = useMemo<ConversationTurn[]>(
+    () => (span ? trace.genAi.conversation.filter((turn) => turn.spanId === span.spanId) : []),
+    [span, trace.genAi.conversation]
+  );
+  const isGenAi = span ? genAiSpanIds.has(span.spanId) : false;
+  const [tab, setTab] = useState<SpanDetailTab>(spanTurns.length > 0 ? "messages" : "properties");
+
+  useEffect(() => {
+    setTab(spanTurns.length > 0 ? "messages" : "properties");
+  }, [selectedSpanId, spanTurns.length]);
+
+  if (!span) return null;
+  const spanLogs = trace.logs.filter((log) => log.spanId === span.spanId);
+  const showMessagesTab = isGenAi || spanTurns.length > 0;
+
   return (
-    <div className="inspector">
-      <div className="inspector-title">
-        <Braces size={15} />
-        <strong>{selected.name}</strong>
-        <code>{selected.serviceName}</code>
-        <span className="inspector-duration">{formatDuration(selected.durationNano)}</span>
+    <>
+      <div className="span-detail-header">
+        <div>
+          {isGenAi ? <Sparkles size={14} className="genai-star" /> : <Braces size={14} />}
+          <strong>{span.name}</strong>
+          <code>{span.serviceName}</code>
+        </div>
+        <span className="muted">{formatDuration(span.durationNano)}</span>
       </div>
-      <pre>{JSON.stringify(selected.attributes, null, 2)}</pre>
+      <div className="tab-strip">
+        {showMessagesTab ? <TabButton active={tab === "messages"} onClick={() => setTab("messages")} label="Messages" count={spanTurns.length} /> : null}
+        <TabButton active={tab === "properties"} onClick={() => setTab("properties")} label="Properties" count={Object.keys(span.attributes).length} />
+        <TabButton active={tab === "events"} onClick={() => setTab("events")} label="Events" count={span.events.length} />
+        <TabButton active={tab === "logs"} onClick={() => setTab("logs")} label="Logs" count={spanLogs.length} />
+      </div>
+      <div className="tab-content">
+        {tab === "messages" ? (
+          spanTurns.length === 0 ? (
+            <InlineEmpty icon={Sparkles} message="No message content recorded. Set OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true to capture chat messages." />
+          ) : (
+            <MessagesView turns={spanTurns} />
+          )
+        ) : tab === "properties" ? (
+          <PropertiesTable record={span.attributes} />
+        ) : tab === "events" ? (
+          span.events.length === 0 ? <InlineEmpty icon={Info} message="No events on this span." /> : (
+            <div className="event-list">
+              {span.events.map((event, index) => (
+                <div className="event-row" key={index}>
+                  <pre>{JSON.stringify(event, null, 2)}</pre>
+                </div>
+              ))}
+            </div>
+          )
+        ) : (
+          spanLogs.length === 0 ? <InlineEmpty icon={FileText} message="No logs correlated with this span." /> : (
+            <div className="span-log-list">
+              {spanLogs.map((log) => (
+                <div className="span-log-row" key={log.id}>
+                  <span className={severityClass(log.severityText)}>{(log.severityText ?? "INFO").toUpperCase()}</span>
+                  <span className="muted mono">{formatTimestamp(log.timeUnixNano)}</span>
+                  <p>{log.bodyText ?? JSON.stringify(log.bodyJson ?? log.attributes)}</p>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+    </>
+  );
+}
+
+function MessagesView({ turns }: { turns: ConversationTurn[] }) {
+  return (
+    <div className="message-list">
+      {turns.map((turn, index) => (
+        <MessageCard key={`${turn.spanId}-${index}-${turn.kind}-${turn.role}`} turn={turn} />
+      ))}
     </div>
   );
 }
 
-function LogTable({ logs, compact = false }: { logs: LogRecord[]; compact?: boolean }) {
-  const items = compact ? logs.slice(0, 8) : logs;
-  const virtual = useVirtualRows(items, 40);
-  if (logs.length === 0) {
-    return <EmptyState scope="logs" compact={compact} />;
+function MessageCard({ turn }: { turn: ConversationTurn }) {
+  const [view, setView] = useState<"preview" | "raw">("preview");
+  const [copied, setCopied] = useState(false);
+  const meta = messageRoleMeta(turn);
+  const isRedacted = turn.contentPreview.startsWith("[redacted");
+
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(turn.contentPreview);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch (error) {
+      // clipboard not available; no-op
+    }
+  };
+
+  return (
+    <article className={`message-card message-${meta.tone}`}>
+      <header className="message-header">
+        <span className={`message-role-badge tone-${meta.tone}`}>
+          <meta.icon size={13} />
+          <strong>{meta.label}</strong>
+          {turn.name ? <code>{turn.name}</code> : null}
+        </span>
+        <div className="message-controls">
+          <div className="segmented">
+            <button type="button" className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}>Preview</button>
+            <button type="button" className={view === "raw" ? "active" : ""} onClick={() => setView("raw")}>Raw</button>
+          </div>
+          <button type="button" className="ghost-button" onClick={onCopy} title="Copy to clipboard">
+            <ClipboardCopy size={12} />
+            <span>{copied ? "Copied" : "Copy"}</span>
+          </button>
+        </div>
+      </header>
+      <div className="message-body">
+        {isRedacted ? <p className="message-redacted">{turn.contentPreview}</p> : view === "preview" ? (
+          <div className="message-preview">{renderMessagePreview(turn)}</div>
+        ) : (
+          <pre className="message-raw">{turn.contentPreview}</pre>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function renderMessagePreview(turn: ConversationTurn): React.ReactNode {
+  const text = turn.contentPreview;
+  if (turn.kind === "tool-call" || turn.kind === "tool-result") {
+    const trimmed = text.trim();
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return <pre className="message-json">{JSON.stringify(parsed, null, 2)}</pre>;
+      } catch {
+        // fall through
+      }
+    }
+  }
+  return text.split(/\n+/).map((paragraph, index) => (
+    <p key={index}>{paragraph}</p>
+  ));
+}
+
+function messageRoleMeta(turn: ConversationTurn): { label: string; icon: typeof Bot; tone: "system" | "user" | "assistant" | "tool-call" | "tool-result" } {
+  if (turn.kind === "tool-call") {
+    return { label: turn.name ? `Tool · ${turn.name}` : "Tool call", icon: Wrench, tone: "tool-call" };
+  }
+  if (turn.kind === "tool-result") {
+    return { label: turn.name ? `Tool result · ${turn.name}` : "Tool result", icon: Wrench, tone: "tool-result" };
+  }
+  switch (turn.role) {
+    case "system":
+      return { label: "System", icon: Cog, tone: "system" };
+    case "user":
+      return { label: "User", icon: UserIcon, tone: "user" };
+    case "assistant":
+      return { label: "Assistant", icon: Bot, tone: "assistant" };
+    case "tool":
+      return { label: turn.name ? `Tool · ${turn.name}` : "Tool", icon: Wrench, tone: "tool-result" };
+    default:
+      return { label: "Message", icon: MessageSquareCode, tone: "assistant" };
+  }
+}
+
+function TabButton({ active, onClick, label, count }: { active: boolean; onClick(): void; label: string; count: number }) {
+  return (
+    <button className={active ? "tab-button active" : "tab-button"} onClick={onClick}>
+      <span>{label}</span>
+      <span className="tab-count">{count}</span>
+    </button>
+  );
+}
+
+function PropertiesTable({ record }: { record: Record<string, unknown> }) {
+  const entries = Object.entries(record);
+  if (entries.length === 0) {
+    return <InlineEmpty icon={Braces} message="No attributes." />;
   }
   return (
-    <div className="log-list" ref={virtual.ref}>
-      <div className="virtual-spacer" style={{ height: virtual.top }} />
-      {virtual.rows.map(({ item: log }) => (
-        <div className="log-row" key={log.id}>
-          <span className={severityClass(log.severityText)}>{log.severityText ?? "INFO"}</span>
-          <strong>{log.serviceName}</strong>
-          <p>{log.bodyText ?? JSON.stringify(log.bodyJson ?? log.attributes)}</p>
-          <code>{log.traceId ? shortId(log.traceId) : "no-trace"}</code>
+    <div className="props-table">
+      {entries.map(([key, value]) => (
+        <div className="props-row" key={key}>
+          <span className="props-key">{key}</span>
+          <span className="props-value">{formatPropValue(value)}</span>
         </div>
       ))}
-      <div className="virtual-spacer" style={{ height: virtual.bottom }} />
     </div>
   );
 }
 
-function MetricsView({ metrics, selectedMetricName, onSelect, series, loading }: { metrics: MetricDescriptor[]; selectedMetricName: string; onSelect(metricName: string): void; series: MetricSeriesPoint[]; loading: boolean }) {
-  const selected = metrics.find((metric) => metric.metricName === selectedMetricName);
-  const virtual = useVirtualRows(metrics, 54);
+function formatPropValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function MetricsPage({ metrics, selectedMetricKey, onSelect, series, loading }: {
+  metrics: MetricDescriptor[];
+  selectedMetricKey: string;
+  onSelect(key: string): void;
+  series: MetricSeriesPoint[];
+  loading: boolean;
+}) {
+  const tree = useMemo(() => buildMetricTree(metrics), [metrics]);
+  const selected = useMemo(() => {
+    if (!selectedMetricKey) return undefined;
+    const [serviceName, meterName, metricName] = selectedMetricKey.split("\u0000");
+    return metrics.find((m) => m.serviceName === serviceName && m.meterName === meterName && m.metricName === metricName);
+  }, [metrics, selectedMetricKey]);
+
   return (
-    <section className="metrics-grid">
-      <div className="panel metrics-list-panel">
-        <PanelHeader icon={Gauge} title="Metric instruments" meta={`${metrics.length} metrics`} />
-        {metrics.length ? (
-          <div className="table metrics-table" ref={virtual.ref}>
-            <div className="metric-row metric-head">
-              <span>Name</span>
-              <span>Type</span>
-              <span>Points</span>
-              <span>Attrs</span>
-            </div>
-            <div className="virtual-spacer" style={{ height: virtual.top }} />
-            {virtual.rows.map(({ item: metric }) => (
-              <button className={metric.metricName === selectedMetricName ? "metric-row active" : "metric-row"} key={`${metric.serviceName}-${metric.meterName}-${metric.metricName}`} onClick={() => onSelect(metric.metricName)}>
-                <span>
-                  <strong>{metric.metricName}</strong>
-                  <code>{metric.serviceName} · {metric.meterName}</code>
-                </span>
-                <span>{metric.metricType}</span>
-                <span>{metric.pointCount}</span>
-                <span>{metric.attributeSets}</span>
-              </button>
-            ))}
-            <div className="virtual-spacer" style={{ height: virtual.bottom }} />
-          </div>
+    <div className="metrics-layout">
+      <div className="panel metric-tree-panel">
+        <div className="panel-subheader">
+          <span>Instruments</span>
+          <span className="muted">{metrics.length}</span>
+        </div>
+        {metrics.length === 0 ? (
+          <InlineEmpty icon={loading ? RotateCw : Gauge} message={loading ? "Loading metrics…" : "No metrics ingested yet."} />
         ) : (
-          <EmptyState scope={loading ? "loading" : "metrics"} />
+          <MetricTree tree={tree} selectedKey={selectedMetricKey} onSelect={onSelect} />
         )}
       </div>
       <div className="panel metric-chart-panel">
-        <PanelHeader icon={Gauge} title={selected?.metricName ?? "Metric series"} meta={selected?.unit ?? "no unit"} />
-        {selected ? <MetricChart series={series} /> : <EmptyState scope="metrics" />}
+        {selected ? (
+          <>
+            <div className="metric-detail-header">
+              <div>
+                <strong>{selected.metricName}</strong>
+                <code>{selected.serviceName} · {selected.meterName}</code>
+              </div>
+              <div className="metric-detail-meta">
+                <InfoCell label="Type" value={selected.metricType} />
+                <InfoCell label="Unit" value={selected.unit ?? "—"} />
+                <InfoCell label="Points" value={selected.pointCount.toLocaleString()} />
+                <InfoCell label="Series" value={selected.attributeSets.toString()} />
+              </div>
+            </div>
+            <MetricChart series={series} />
+            {selected.description ? <p className="metric-description">{selected.description}</p> : null}
+          </>
+        ) : (
+          <InlineEmpty icon={Gauge} message="Select an instrument to view its time series." />
+        )}
       </div>
-    </section>
+    </div>
+  );
+}
+
+interface MetricTreeNode {
+  service: string;
+  meters: Array<{ meter: string; metrics: MetricDescriptor[] }>;
+}
+
+function buildMetricTree(metrics: MetricDescriptor[]): MetricTreeNode[] {
+  const byService = new Map<string, Map<string, MetricDescriptor[]>>();
+  for (const metric of metrics) {
+    if (!byService.has(metric.serviceName)) byService.set(metric.serviceName, new Map());
+    const meters = byService.get(metric.serviceName)!;
+    if (!meters.has(metric.meterName)) meters.set(metric.meterName, []);
+    meters.get(metric.meterName)!.push(metric);
+  }
+  return Array.from(byService.entries()).map(([service, meters]) => ({
+    service,
+    meters: Array.from(meters.entries()).map(([meter, list]) => ({ meter, metrics: list }))
+  }));
+}
+
+function MetricTree({ tree, selectedKey, onSelect }: { tree: MetricTreeNode[]; selectedKey: string; onSelect(key: string): void }) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const toggle = (key: string) => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  return (
+    <div className="metric-tree">
+      {tree.map((node) => (
+        <div className="metric-tree-service" key={node.service}>
+          <button className="tree-row tree-service" onClick={() => toggle(node.service)}>
+            {collapsed[node.service] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+            <Server size={13} />
+            <strong>{node.service}</strong>
+          </button>
+          {collapsed[node.service] ? null : node.meters.map((meterGroup) => {
+            const meterKey = `${node.service}::${meterGroup.meter}`;
+            const meterCollapsed = collapsed[meterKey];
+            return (
+              <div key={meterKey}>
+                <button className="tree-row tree-meter" onClick={() => toggle(meterKey)}>
+                  {meterCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                  <span>{meterGroup.meter}</span>
+                </button>
+                {meterCollapsed ? null : meterGroup.metrics.map((metric) => {
+                  const key = `${metric.serviceName}\u0000${metric.meterName}\u0000${metric.metricName}`;
+                  return (
+                    <button
+                      key={key}
+                      className={key === selectedKey ? "tree-row tree-metric active" : "tree-row tree-metric"}
+                      onClick={() => onSelect(key)}
+                    >
+                      <Gauge size={11} />
+                      <span className="metric-tree-name">{metric.metricName}</span>
+                      <span className="metric-tree-type">{metric.metricType}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
   );
 }
 
 function MetricChart({ series }: { series: MetricSeriesPoint[] }) {
   if (!series.length) {
-    return <EmptyState scope="metrics" compact />;
+    return <InlineEmpty icon={Gauge} message="No data points captured yet." />;
   }
-  const latestPoint = series[series.length - 1];
   const values = series.map((point) => point.value ?? point.sum ?? point.count ?? 0);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -769,30 +1264,48 @@ function MetricChart({ series }: { series: MetricSeriesPoint[] }) {
         <strong>latest {values[values.length - 1]?.toFixed(2)}</strong>
         <span>max {max.toFixed(2)}</span>
       </div>
-      {latestPoint ? <MetricPointDetails point={latestPoint} /> : null}
     </div>
   );
 }
 
-function MetricPointDetails({ point }: { point: MetricSeriesPoint }) {
-  const exemplarCount = point.exemplars.length;
-  if (!point.distribution && exemplarCount === 0) {
-    return null;
+function GenAiPage({ traces, selectedTraceId, onSelect, trace, loading }: {
+  traces: TraceSummary[];
+  selectedTraceId: string;
+  onSelect(id: string): void;
+  trace: TraceDetail | undefined;
+  loading: boolean;
+}) {
+  if (traces.length === 0) {
+    return <EmptyPanel icon={loading ? RotateCw : Sparkles} title={loading ? "Loading GenAI traces…" : "No GenAI traces yet"} body={<>Emit spans with <code>gen_ai.*</code> attributes to populate this view.</>} />;
   }
   return (
-    <div className="metric-point-details">
-      {point.distribution ? (
-        <div>
-          <strong>{String(point.distribution.kind ?? "distribution")}</strong>
-          <pre>{JSON.stringify(point.distribution, null, 2)}</pre>
+    <div className="genai-layout">
+      <div className="panel genai-list-panel">
+        <div className="panel-subheader">
+          <span>GenAI traces</span>
+          <span className="muted">{traces.length}</span>
         </div>
-      ) : null}
-      {exemplarCount ? (
-        <div>
-          <strong>{exemplarCount} exemplars</strong>
-          <pre>{JSON.stringify(point.exemplars.slice(0, 5), null, 2)}</pre>
+        <div className="genai-list">
+          {traces.map((item) => (
+            <button
+              key={item.traceId}
+              className={item.traceId === selectedTraceId ? "genai-list-row active" : "genai-list-row"}
+              onClick={() => onSelect(item.traceId)}
+            >
+              <strong>{item.rootName}</strong>
+              <code>{shortId(item.traceId)}</code>
+              <div className="genai-list-meta">
+                <span>{(item.inputTokens ?? 0) + (item.outputTokens ?? 0)} tokens</span>
+                <span>{item.genAiSpanCount} spans</span>
+                <span>{item.serviceNames.join(", ")}</span>
+              </div>
+            </button>
+          ))}
         </div>
-      ) : null}
+      </div>
+      <div className="panel genai-detail-panel">
+        {trace?.genAi.spans.length ? <GenAiSummary trace={trace} /> : <InlineEmpty icon={Sparkles} message="Select a GenAI trace to view its agent timeline." />}
+      </div>
     </div>
   );
 }
@@ -814,16 +1327,14 @@ function GenAiSummary({ trace }: { trace: TraceDetail }) {
   }));
   return (
     <div className="genai-summary">
-      <div className="token-grid">
-        <Metric label="Input tokens" value={trace.genAi.inputTokens ?? 0} />
-        <Metric label="Output tokens" value={trace.genAi.outputTokens ?? 0} />
-        <Metric label="Tool calls" value={trace.genAi.toolCallCount} />
-      </div>
-      <div className="genai-facts">
-        <span>Total {trace.genAi.totalTokens ?? 0} tokens</span>
-        <span>Cost {trace.genAi.estimatedCostUsd === undefined ? "n/a" : `$${trace.genAi.estimatedCostUsd.toFixed(5)}`}</span>
-        <span>Retrieved docs {trace.genAi.rag.retrievedDocCount}</span>
-        <span>Longest {trace.genAi.longestStep ? formatDuration(trace.genAi.longestStep.durationNano) : "n/a"}</span>
+      <div className="genai-info-bar">
+        <InfoCell label="Input tokens" value={(trace.genAi.inputTokens ?? 0).toLocaleString()} />
+        <InfoCell label="Output tokens" value={(trace.genAi.outputTokens ?? 0).toLocaleString()} />
+        <InfoCell label="Total" value={(trace.genAi.totalTokens ?? 0).toLocaleString()} />
+        <InfoCell label="Tool calls" value={trace.genAi.toolCallCount.toString()} />
+        <InfoCell label="Retrieved docs" value={trace.genAi.rag.retrievedDocCount.toString()} />
+        <InfoCell label="Cost" value={trace.genAi.estimatedCostUsd === undefined ? "n/a" : `$${trace.genAi.estimatedCostUsd.toFixed(5)}`} />
+        <InfoCell label="Longest step" value={trace.genAi.longestStep ? formatDuration(trace.genAi.longestStep.durationNano) : "n/a"} />
       </div>
       <div className="agent-timeline">
         {timeline.map((span) => (
@@ -839,107 +1350,78 @@ function GenAiSummary({ trace }: { trace: TraceDetail }) {
           </div>
         ))}
       </div>
-      {trace.genAi.conversation.length ? (
-        <div className="conversation-list">
-          {trace.genAi.conversation.map((turn, index) => (
-            <div className={`conversation-turn ${turn.role}`} key={`${turn.spanId}-${turn.role}-${index}`}>
-              <span>{turn.name ?? turn.role}</span>
-              <p>{turn.contentPreview}</p>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {trace.genAi.rag.documents.length ? (
-        <div className="rag-docs">
-          {trace.genAi.rag.documents.map((document, index) => (
-            <div className="rag-doc" key={`${document.spanId}-${document.id ?? index}`}>
-              <strong>{document.title ?? document.id ?? `Document ${index + 1}`}</strong>
-              <span>{document.score === undefined ? "score n/a" : `score ${document.score.toFixed(3)}`}</span>
-              {document.contentPreview ? <p>{document.contentPreview}</p> : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
     </div>
   );
 }
 
-function GenAiEmpty() {
+function SettingsPage({ health }: { health: Health | undefined }) {
+  const endpoints = [
+    { label: "Dashboard", value: "http://localhost:18888" },
+    { label: "OTLP/HTTP", value: "http://localhost:4318" },
+    { label: "OTLP/gRPC", value: "grpc://localhost:4317" }
+  ];
   return (
-    <div className="empty-state compact">
-      <Sparkles size={18} />
-      <p>No GenAI spans detected in the selected trace.</p>
+    <div className="settings-layout">
+      <div className="panel">
+        <div className="panel-subheader">
+          <span>Endpoints</span>
+          <span className="muted">{health?.ok ? "online" : "offline"}</span>
+        </div>
+        <div className="settings-list">
+          {endpoints.map((item) => (
+            <div className="settings-row" key={item.label}>
+              <span>{item.label}</span>
+              <code>{item.value}</code>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-subheader">
+          <span>Storage</span>
+          <span className="muted">{health?.storage ?? "memory"}</span>
+        </div>
+        <div className="settings-list">
+          <div className="settings-row"><span>Traces</span><strong>{(health?.traces ?? 0).toLocaleString()}</strong></div>
+          <div className="settings-row"><span>Spans</span><strong>{(health?.spans ?? 0).toLocaleString()}</strong></div>
+          <div className="settings-row"><span>Logs</span><strong>{(health?.logs ?? 0).toLocaleString()}</strong></div>
+          <div className="settings-row"><span>Metric points</span><strong>{(health?.metrics ?? 0).toLocaleString()}</strong></div>
+          <div className="settings-row"><span>Raw batches</span><strong>{(health?.batches ?? 0).toLocaleString()}</strong></div>
+        </div>
+      </div>
+      <div className="panel settings-tips-panel">
+        <div className="panel-subheader">
+          <span>Quick commands</span>
+          <span className="muted">cli</span>
+        </div>
+        <div className="settings-list">
+          <div className="settings-row"><span>Send sample</span><code>./examples/otlp-json-smoke.sh</code></div>
+          <div className="settings-row"><span>Clear data</span><code>pnpm --filter local-otel-workbench start -- clear</code></div>
+          <div className="settings-row"><span>Export</span><code>pnpm --filter local-otel-workbench start -- export --out ./telemetry.json</code></div>
+          <div className="settings-row"><span>Retention</span><code>pnpm --filter local-otel-workbench start -- retention --retention 7d</code></div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function EmptyState({ scope = "default", compact = false }: { scope?: "default" | "loading" | "traces" | "logs" | "metrics" | "trace" | "genai" | "resources"; compact?: boolean }) {
-  const { icon: Icon, message } = emptyContent(scope);
+function EmptyPanel({ icon: Icon, title, body }: { icon: typeof Radio; title: string; body?: React.ReactNode }) {
   return (
-    <div className={compact ? "empty-state compact" : "empty-state"}>
-      <Icon size={20} />
+    <div className="panel empty-panel">
+      <Icon size={28} />
+      <h3>{title}</h3>
+      {body ? <p>{body}</p> : null}
+    </div>
+  );
+}
+
+function InlineEmpty({ icon: Icon, message }: { icon: typeof Radio; message: string }) {
+  return (
+    <div className="inline-empty">
+      <Icon size={18} />
       <p>{message}</p>
     </div>
   );
-}
-
-function emptyContent(scope: string): { icon: typeof Radio; message: React.ReactNode } {
-  switch (scope) {
-    case "loading":
-      return { icon: RotateCw, message: "Loading telemetry…" };
-    case "traces":
-      return { icon: GitBranch, message: <>No traces yet. Send a span to <code>localhost:4318/v1/traces</code>.</> };
-    case "logs":
-      return { icon: FileText, message: <>No logs match the current filters.</> };
-    case "metrics":
-      return { icon: Gauge, message: <>No metric data points yet.</> };
-    case "trace":
-      return { icon: GitBranch, message: <>Select a trace from the list to inspect spans.</> };
-    case "genai":
-      return { icon: Sparkles, message: <>No GenAI traces yet. Emit a span with <code>gen_ai.*</code> attributes.</> };
-    case "resources":
-      return { icon: Server, message: <>No services have reported telemetry yet.</> };
-    default:
-      return { icon: Radio, message: <>Waiting for OTLP telemetry on <code>localhost:4318</code>.</> };
-  }
-}
-
-function useVirtualRows<T>(items: T[], rowHeight: number) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [range, setRange] = useState({ start: 0, end: Math.min(items.length, 80) });
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) {
-      return;
-    }
-    const update = () => {
-      const headerRows = element.querySelectorAll(".table-head, .metric-head").length;
-      const headerHeight = headerRows ? 34 : 0;
-      const top = Math.max(0, element.scrollTop - headerHeight);
-      const visible = Math.ceil(element.clientHeight / rowHeight);
-      const start = Math.max(0, Math.floor(top / rowHeight) - 8);
-      const end = Math.min(items.length, start + visible + 20);
-      setRange((current) => current.start === start && current.end === end ? current : { start, end });
-    };
-    update();
-    element.addEventListener("scroll", update, { passive: true });
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => {
-      element.removeEventListener("scroll", update);
-      observer.disconnect();
-    };
-  }, [items.length, rowHeight]);
-
-  const end = Math.min(range.end, items.length);
-  const start = Math.min(range.start, end);
-  return {
-    ref,
-    rows: items.slice(start, end).map((item, offset) => ({ item, index: start + offset })),
-    top: start * rowHeight,
-    bottom: Math.max(0, (items.length - end) * rowHeight)
-  };
 }
 
 function formatDuration(nano: number) {
@@ -954,6 +1436,7 @@ function formatRelative(timestampMs: number) {
   const diff = Date.now() - timestampMs;
   if (diff < 0) return "just now";
   const seconds = Math.floor(diff / 1000);
+  if (seconds < 5) return "just now";
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
@@ -961,6 +1444,14 @@ function formatRelative(timestampMs: number) {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function formatTimestamp(nano: string | undefined): string {
+  if (!nano) return "—";
+  const ms = Number(nano) / 1_000_000;
+  if (!Number.isFinite(ms)) return "—";
+  const date = new Date(ms);
+  return date.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function shortId(value: string) {

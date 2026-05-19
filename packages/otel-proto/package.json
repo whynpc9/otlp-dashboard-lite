@@ -1,5 +1,5 @@
 {
-  "name": "@devdash/otel-proto",
+  "name": "@local-otel/otel-proto",
   "private": true,
   "version": "0.1.0",
   "type": "module",

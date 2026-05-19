@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import type {
+  GenAiTraceListQuery,
   GenAiTraceSummary,
   IngestBatch,
   IngestResult,
@@ -250,9 +251,15 @@ export class MemoryTelemetryStore implements TelemetryStore {
       }));
   }
 
-  listGenAiTraces(): TraceSummary[] {
-    return this.listTraces({ limit: 100 })
-      .filter((trace) => trace.genAiSpanCount > 0);
+  listGenAiTraces(query: GenAiTraceListQuery = {}): TraceSummary[] {
+    return this.listTraces({
+      service: query.service,
+      q: query.q,
+      fromUnixNano: query.fromUnixNano,
+      toUnixNano: query.toUnixNano,
+      offset: query.offset,
+      limit: query.limit ?? 100
+    }).filter((trace) => trace.genAiSpanCount > 0);
   }
 
   exportData() {
@@ -594,9 +601,14 @@ function normalizeRagDocument(value: unknown) {
 
 function extractConversationTurns(span: NormalizedSpan) {
   const attrs = span.attributes;
-  const turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; name?: string | undefined; contentPreview: string }> = [];
-  addTurn(turns, span, "system", readFirstString(attrs, ["gen_ai.system.message", "llm.system", "system"]));
-  addTurn(turns, span, "user", readFirstString(attrs, [
+  const turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; kind: "message" | "tool-call" | "tool-result"; name?: string | undefined; contentPreview: string }> = [];
+  const toolName = readString(attrs, "tool.name")
+    ?? readString(attrs, "mcp.tool.name")
+    ?? readString(attrs, "function.name")
+    ?? readString(attrs, "gen_ai.tool.name");
+
+  addTurn(turns, span, "system", "message", readFirstString(attrs, ["gen_ai.system.message", "llm.system", "system"]));
+  addTurn(turns, span, "user", "message", readFirstString(attrs, [
     "gen_ai.prompt",
     "gen_ai.input",
     "llm.prompt",
@@ -604,7 +616,7 @@ function extractConversationTurns(span: NormalizedSpan) {
     "input",
     "openinference.input.value"
   ]));
-  addTurn(turns, span, "assistant", readFirstString(attrs, [
+  addTurn(turns, span, "assistant", "message", readFirstString(attrs, [
     "gen_ai.completion",
     "gen_ai.output",
     "llm.completion",
@@ -612,28 +624,246 @@ function extractConversationTurns(span: NormalizedSpan) {
     "output",
     "openinference.output.value"
   ]));
-  addTurn(turns, span, "tool", readFirstString(attrs, [
+  addTurn(turns, span, "tool", "tool-call", readFirstString(attrs, [
+    "tool.input",
+    "tool.args",
+    "tool.arguments",
+    "tool.parameters",
+    "mcp.tool.arguments",
+    "function.arguments",
+    "gen_ai.tool.arguments"
+  ]), toolName);
+  addTurn(turns, span, "tool", "tool-result", readFirstString(attrs, [
     "tool.output",
     "tool.result",
     "mcp.tool.result",
-    "function.result"
-  ]), readString(attrs, "tool.name") ?? readString(attrs, "mcp.tool.name") ?? readString(attrs, "function.name"));
+    "function.result",
+    "gen_ai.tool.result"
+  ]), toolName);
+
+  // Newer OTel GenAI semconv (≈2.x experimental): single structured array attributes that hold
+  // every input/output message with role + typed parts.
+  addTurnsFromMessagesArray(turns, span, attrs["gen_ai.input.messages"], toolName, "user");
+  addTurnsFromMessagesArray(turns, span, attrs["gen_ai.output.messages"], toolName, "assistant");
 
   for (const event of span.events) {
-    const role = conversationRole(readString(event, "role") ?? readString(event, "message.role")) ?? roleFromEventName(readString(event, "name"));
-    const content = readFirstString(event, ["content", "message.content", "body", "text"]);
-    if (role && content) {
-      addTurn(turns, span, role, content, readString(event, "name"));
+    const eventRecord = isRecord(event) ? event : {};
+    const eventAttrs = isRecord(eventRecord.attributes) ? eventRecord.attributes as Record<string, unknown> : eventRecord;
+    const eventName = readString(eventRecord, "name");
+
+    // Newer semconv `gen_ai.client.inference.operation.details` event mirrors the input/output arrays.
+    addTurnsFromMessagesArray(turns, span, eventAttrs["gen_ai.input.messages"], toolName, "user");
+    addTurnsFromMessagesArray(turns, span, eventAttrs["gen_ai.output.messages"], toolName, "assistant");
+
+    // OTel GenAI `gen_ai.choice` event holds a nested `message: { role, content, tool_calls }`.
+    const choiceMessage = parseMaybeJsonObject(eventAttrs["message"]);
+    if (choiceMessage) {
+      const choiceRole = conversationRole(readString(choiceMessage, "role"))
+        ?? roleFromEventName(eventName)
+        ?? "assistant";
+      const choiceContent = extractMessageContent(choiceMessage);
+      if (choiceContent) {
+        addTurn(turns, span, choiceRole, "message", choiceContent);
+      }
+      addTurnsFromToolCalls(turns, span, choiceMessage["tool_calls"], toolName);
     }
+
+    // Standard OTel GenAI message events: `gen_ai.{system|user|assistant|tool}.message`.
+    const role = conversationRole(readString(eventAttrs, "role") ?? readString(eventAttrs, "message.role"))
+      ?? roleFromEventName(eventName);
+    const content = extractMessageContent(eventAttrs);
+    if (role && content) {
+      const kind = role === "tool"
+        ? (eventName?.toLowerCase().includes("result") || eventName?.toLowerCase().includes("output") ? "tool-result" : "tool-call")
+        : "message";
+      addTurn(turns, span, role, kind, content, eventName);
+    }
+
+    // Assistant message events can carry `tool_calls` as a structured array.
+    addTurnsFromToolCalls(turns, span, eventAttrs["tool_calls"], toolName);
   }
 
   return turns;
 }
 
+// Handles the newer OTel GenAI structured `messages` array, where each entry has
+// `{ role, parts: [{ type: "text" | "tool_call" | "tool_call_response", ... }] }`.
+function addTurnsFromMessagesArray(
+  turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; kind: "message" | "tool-call" | "tool-result"; name?: string | undefined; contentPreview: string }>,
+  span: NormalizedSpan,
+  value: unknown,
+  fallbackToolName: string | undefined,
+  defaultRole: "user" | "assistant"
+) {
+  const list = parseMaybeJsonArray(value);
+  if (!list) return;
+  for (const entry of list) {
+    if (!isRecord(entry)) continue;
+    const role = conversationRole(readString(entry, "role")) ?? defaultRole;
+    const parts = parseMaybeJsonArray(entry.parts);
+    if (parts && parts.length > 0) {
+      const textChunks: string[] = [];
+      const toolCalls: Array<{ name: string | undefined; content: string }> = [];
+      const toolResults: Array<{ name: string | undefined; content: string }> = [];
+      for (const part of parts) {
+        if (typeof part === "string") {
+          textChunks.push(part);
+          continue;
+        }
+        if (!isRecord(part)) continue;
+        const type = readString(part, "type")?.toLowerCase() ?? "text";
+        if (type === "tool_call" || type === "tool-call" || type === "tool_use") {
+          const name = readString(part, "name") ?? readString(part, "tool_name") ?? fallbackToolName;
+          const args = flattenContentValue(part.arguments ?? part.input ?? part.parameters);
+          if (args) {
+            toolCalls.push({ name, content: args });
+          }
+        } else if (type === "tool_call_response" || type === "tool_result" || type === "tool-result") {
+          const name = readString(part, "name") ?? readString(part, "tool_name") ?? fallbackToolName;
+          const result = flattenContentValue(part.response ?? part.result ?? part.output ?? part.content);
+          if (result) {
+            toolResults.push({ name, content: result });
+          }
+        } else {
+          const text = flattenContentValue(part.content ?? part.text ?? part.value ?? part);
+          if (text) {
+            textChunks.push(text);
+          }
+        }
+      }
+      if (textChunks.length > 0) {
+        addTurn(turns, span, role, "message", textChunks.join("\n\n"));
+      }
+      for (const call of toolCalls) {
+        addTurn(turns, span, "tool", "tool-call", call.content, call.name);
+      }
+      for (const result of toolResults) {
+        addTurn(turns, span, "tool", "tool-result", result.content, result.name);
+      }
+    } else {
+      const content = extractMessageContent(entry);
+      if (content) {
+        addTurn(turns, span, role, "message", content);
+      }
+    }
+    addTurnsFromToolCalls(turns, span, entry.tool_calls, fallbackToolName);
+  }
+}
+
+function extractMessageContent(record: Record<string, unknown>): string | undefined {
+  for (const key of ["content", "message.content", "body", "text", "value"]) {
+    const value = record[key];
+    const flat = flattenContentValue(value);
+    if (flat) {
+      return flat;
+    }
+  }
+  return undefined;
+}
+
+function flattenContentValue(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const parsed = parseMaybeJson(value);
+    if (parsed !== undefined && parsed !== value) {
+      const nested = flattenContentValue(parsed);
+      if (nested) return nested;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (isRecord(item)) {
+          const text = readString(item, "text") ?? readString(item, "content") ?? readString(item, "value");
+          if (text) return text;
+          return safeStringify(item);
+        }
+        return undefined;
+      })
+      .filter((part): part is string => Boolean(part));
+    if (parts.length === 0) return undefined;
+    return parts.join("\n\n");
+  }
+  if (isRecord(value)) {
+    if (value.redacted === true) {
+      const bytes = typeof value.bytes === "number" ? `${value.bytes} bytes` : "content";
+      const hash = typeof value.sha256 === "string" ? `, hash ${value.sha256}` : "";
+      return `[redacted ${bytes}${hash}]`;
+    }
+    const text = readString(value, "text") ?? readString(value, "content") ?? readString(value, "value");
+    if (text) return text;
+    return safeStringify(value);
+  }
+  return undefined;
+}
+
+function parseMaybeJson(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed || (trimmed[0] !== "{" && trimmed[0] !== "[")) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (isRecord(value)) return value;
+  if (typeof value === "string") {
+    const parsed = parseMaybeJson(value);
+    if (isRecord(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function addTurnsFromToolCalls(
+  turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; kind: "message" | "tool-call" | "tool-result"; name?: string | undefined; contentPreview: string }>,
+  span: NormalizedSpan,
+  value: unknown,
+  fallbackName: string | undefined
+) {
+  const list = parseMaybeJsonArray(value);
+  if (!list) return;
+  for (const entry of list) {
+    if (!isRecord(entry)) continue;
+    const fn = isRecord(entry.function) ? entry.function : entry;
+    const callName = readString(fn, "name") ?? readString(entry, "name") ?? fallbackName;
+    const argsValue = fn.arguments ?? entry.arguments ?? entry.input ?? entry.parameters;
+    const args = flattenContentValue(argsValue);
+    if (args) {
+      addTurn(turns, span, "tool", "tool-call", args, callName);
+    }
+  }
+}
+
+function parseMaybeJsonArray(value: unknown): unknown[] | undefined {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    const parsed = parseMaybeJson(value);
+    if (Array.isArray(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function safeStringify(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function addTurn(
-  turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; name?: string | undefined; contentPreview: string }>,
+  turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; kind: "message" | "tool-call" | "tool-result"; name?: string | undefined; contentPreview: string }>,
   span: NormalizedSpan,
   role: "system" | "user" | "assistant" | "tool",
+  kind: "message" | "tool-call" | "tool-result",
   value?: string,
   name?: string
 ) {
@@ -643,8 +873,9 @@ function addTurn(
   turns.push({
     spanId: span.spanId,
     role,
+    kind,
     name,
-    contentPreview: truncate(value, 600)
+    contentPreview: truncate(value, 2000)
   });
 }
 
@@ -682,7 +913,7 @@ function roleFromEventName(name: string | undefined): "system" | "user" | "assis
   const lower = name?.toLowerCase() ?? "";
   if (lower.includes("system")) return "system";
   if (lower.includes("user") || lower.includes("prompt")) return "user";
-  if (lower.includes("assistant") || lower.includes("completion") || lower.includes("response")) return "assistant";
+  if (lower.includes("assistant") || lower.includes("completion") || lower.includes("response") || lower.includes("choice")) return "assistant";
   if (lower.includes("tool")) return "tool";
   return undefined;
 }

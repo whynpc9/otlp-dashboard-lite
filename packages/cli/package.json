@@ -1,11 +1,11 @@
 {
-  "name": "@devdash/cli",
+  "name": "local-otel-workbench",
   "private": true,
   "version": "0.1.0",
-  "description": "Local OTLP Workbench CLI for microservices and AI agents.",
+  "description": "Local OTel Workbench CLI for microservices and AI agents.",
   "type": "module",
   "bin": {
-    "devdash": "./dist/index.js"
+    "otel-workbench": "./dist/index.js"
   },
   "exports": {
     ".": "./dist/index.js"
@@ -23,7 +23,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@devdash/server": "workspace:*"
+    "@local-otel/server": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^3.1.4"

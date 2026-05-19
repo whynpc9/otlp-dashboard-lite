@@ -19,7 +19,7 @@ export async function runMcpServer(options: McpServerOptions) {
   const server = createWorkbenchMcpServer(baseUrl);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`Local OTLP Workbench MCP server connected to ${baseUrl}`);
+  console.error(`Local OTel Workbench MCP server connected to ${baseUrl}`);
 }
 
 export async function runMcpHttpServer(options: McpHttpServerOptions) {
@@ -65,7 +65,7 @@ export async function runMcpHttpServer(options: McpHttpServerOptions) {
   });
 
   await new Promise<void>((resolve) => httpServer.listen(options.port, options.host, resolve));
-  console.error(`Local OTLP Workbench MCP HTTP server listening on http://${options.host}:${options.port}/mcp`);
+  console.error(`Local OTel Workbench MCP HTTP server listening on http://${options.host}:${options.port}/mcp`);
   console.error(`Dashboard API: ${baseUrl}`);
 
   const shutdown = async () => {
@@ -79,7 +79,7 @@ export async function runMcpHttpServer(options: McpHttpServerOptions) {
 
 function createWorkbenchMcpServer(baseUrl: string) {
   const server = new McpServer({
-    name: "local-otlp-workbench",
+    name: "local-otel-workbench",
     version: "0.1.0"
   });
   registerWorkbenchTools(server, baseUrl);

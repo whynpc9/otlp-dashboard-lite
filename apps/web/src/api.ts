@@ -89,6 +89,7 @@ export interface TraceDetail extends TraceSummary {
     conversation: Array<{
       spanId: string;
       role: "system" | "user" | "assistant" | "tool";
+      kind: "message" | "tool-call" | "tool-result";
       name?: string | undefined;
       contentPreview: string;
     }>;
@@ -147,11 +148,13 @@ export async function getHealth(): Promise<Health> {
   return getJson("/api/health");
 }
 
-export async function listTraces(filters: { service?: string | undefined; q?: string | undefined; hasError?: boolean | undefined }): Promise<TraceSummary[]> {
+export async function listTraces(filters: { service?: string | undefined; q?: string | undefined; hasError?: boolean | undefined; from?: string | undefined; to?: string | undefined }): Promise<TraceSummary[]> {
   const params = new URLSearchParams();
   if (filters.service) params.set("service", filters.service);
   if (filters.q) params.set("q", filters.q);
   if (filters.hasError !== undefined) params.set("hasError", String(filters.hasError));
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
   params.set("limit", "100");
   const response = await getJson<{ traces: TraceSummary[] }>(`/api/traces?${params.toString()}`);
   return response.traces;
@@ -163,11 +166,13 @@ export async function getTrace(traceId: string): Promise<TraceDetail | undefined
   return response.trace;
 }
 
-export async function listLogs(filters: { service?: string | undefined; traceId?: string | undefined; q?: string | undefined }): Promise<LogRecord[]> {
+export async function listLogs(filters: { service?: string | undefined; traceId?: string | undefined; q?: string | undefined; from?: string | undefined; to?: string | undefined }): Promise<LogRecord[]> {
   const params = new URLSearchParams();
   if (filters.service) params.set("service", filters.service);
   if (filters.traceId) params.set("traceId", filters.traceId);
   if (filters.q) params.set("q", filters.q);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
   params.set("limit", "200");
   const response = await getJson<{ logs: LogRecord[] }>(`/api/logs?${params.toString()}`);
   return response.logs;
@@ -178,22 +183,33 @@ export async function listResources(): Promise<Array<{ serviceName: string; span
   return response.resources;
 }
 
-export async function listMetrics(filters: { service?: string | undefined; q?: string | undefined }): Promise<MetricDescriptor[]> {
+export async function listMetrics(filters: { service?: string | undefined; q?: string | undefined; from?: string | undefined; to?: string | undefined }): Promise<MetricDescriptor[]> {
   const params = new URLSearchParams();
   if (filters.service) params.set("service", filters.service);
   if (filters.q) params.set("q", filters.q);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
   params.set("limit", "100");
   const response = await getJson<{ metrics: MetricDescriptor[] }>(`/api/metrics?${params.toString()}`);
   return response.metrics;
 }
 
-export async function getMetricSeries(metricName: string, service?: string): Promise<MetricSeriesPoint[]> {
+export async function getMetricSeries(metricName: string, service?: string, options?: { from?: string | undefined; to?: string | undefined }): Promise<MetricSeriesPoint[]> {
   if (!metricName) return [];
   const params = new URLSearchParams();
   if (service) params.set("service", service);
+  if (options?.from) params.set("from", options.from);
+  if (options?.to) params.set("to", options.to);
   params.set("limit", "120");
   const response = await getJson<{ series: MetricSeriesPoint[] }>(`/api/metrics/${encodeURIComponent(metricName)}/series?${params.toString()}`);
   return response.series;
+}
+
+export async function clearAllData(): Promise<void> {
+  const response = await fetch("/api/data", { method: "DELETE" });
+  if (!response.ok && response.status !== 204) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
 }
 
 async function getJson<T>(url: string): Promise<T> {

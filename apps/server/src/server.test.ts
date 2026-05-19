@@ -125,8 +125,8 @@ describe("OTLP HTTP receiver", () => {
   });
 
   it("persists traces and logs in SQLite across restarts", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "devdash-sqlite-"));
-    const dbPath = join(dir, "devdash.db");
+    const dir = await mkdtemp(join(tmpdir(), "otel-workbench-sqlite-"));
+    const dbPath = join(dir, "local-otel-workbench.db");
     try {
       running = await startServers({
         host: "127.0.0.1",
@@ -170,8 +170,8 @@ describe("OTLP HTTP receiver", () => {
   });
 
   it("enforces SQLite DB size retention by deleting oldest telemetry", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "devdash-sqlite-size-"));
-    const dbPath = join(dir, "devdash.db");
+    const dir = await mkdtemp(join(tmpdir(), "otel-workbench-sqlite-size-"));
+    const dbPath = join(dir, "local-otel-workbench.db");
     try {
       running = await startServers({
         host: "127.0.0.1",
@@ -386,7 +386,8 @@ describe("OTLP HTTP receiver", () => {
     const detail = await fetchJson<{ trace: { spans: Array<{ attributes: Record<string, unknown> }>; logs: Array<{ bodyText: string }> } }>(
       `${dashboardUrl}/api/traces/11111111111111111111111111111111`
     );
-    expect(detail.trace.spans[0]?.attributes["gen_ai.prompt.0.content"]).toMatchObject({ redacted: true });
+    const promptText = detail.trace.spans[0]?.attributes["gen_ai.prompt.0.content"];
+    expect(promptText).toBe("email [redacted] and use [redacted]");
     expect(detail.trace.spans[0]?.attributes["db.connection_string"]).toBe("[redacted]");
     expect(detail.trace.logs[0]?.bodyText).toContain("[redacted]");
   });
@@ -427,6 +428,218 @@ describe("OTLP HTTP receiver", () => {
     });
   });
 
+  it("captures tool call input and output as distinct conversation turns", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    const dashboardUrl = addressUrl(running.dashboard);
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      name: "search_orders tool",
+      extraAttributes: [
+        { key: "tool.name", value: { stringValue: "search_orders" } },
+        { key: "tool.input", value: { stringValue: "{\"query\":\"recent failed orders\"}" } },
+        { key: "tool.output", value: { stringValue: "[{\"id\":\"ord_42\",\"status\":\"failed\"}]" } }
+      ]
+    }));
+
+    const detail = await fetchJson<{ trace: { genAi: { conversation: Array<{ role: string; kind: string; name?: string; contentPreview: string }> } } }>(
+      `${dashboardUrl}/api/traces/11111111111111111111111111111111`
+    );
+    const toolTurns = detail.trace.genAi.conversation.filter((turn) => turn.role === "tool");
+    expect(toolTurns.map((turn) => turn.kind)).toEqual(["tool-call", "tool-result"]);
+    expect(toolTurns[0]).toMatchObject({ name: "search_orders", contentPreview: "{\"query\":\"recent failed orders\"}" });
+    expect(toolTurns[1]).toMatchObject({ name: "search_orders", contentPreview: "[{\"id\":\"ord_42\",\"status\":\"failed\"}]" });
+  });
+
+  it("extracts conversation turns from newer GenAI semconv (gen_ai.input.messages array)", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    const dashboardUrl = addressUrl(running.dashboard);
+    const inputMessages = [
+      {
+        role: "system",
+        parts: [{ type: "text", content: "You are a clinical scribe." }]
+      },
+      {
+        role: "user",
+        parts: [{ type: "text", content: "术前诊断: 复杂垂体瘤。" }]
+      }
+    ];
+    const outputMessages = [
+      {
+        role: "assistant",
+        parts: [
+          { type: "text", content: "Calling diagnosis lookup." },
+          { type: "tool_call", id: "call_1", name: "lookup_diagnosis", arguments: { icd: "D35.2" } }
+        ],
+        finish_reason: "tool_calls"
+      }
+    ];
+
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      name: "chat Qwen/Qwen3-32B",
+      extraAttributes: [
+        { key: "gen_ai.operation.name", value: { stringValue: "chat" } },
+        { key: "gen_ai.input.messages", value: { stringValue: JSON.stringify(inputMessages) } },
+        { key: "gen_ai.output.messages", value: { stringValue: JSON.stringify(outputMessages) } }
+      ]
+    }));
+
+    const detail = await fetchJson<{ trace: { genAi: { conversation: Array<{ role: string; kind: string; name?: string; contentPreview: string }> } } }>(
+      `${dashboardUrl}/api/traces/11111111111111111111111111111111`
+    );
+    const conv = detail.trace.genAi.conversation;
+    expect(conv.map((t) => `${t.role}:${t.kind}`)).toEqual([
+      "system:message",
+      "user:message",
+      "assistant:message",
+      "tool:tool-call"
+    ]);
+    expect(conv[0]?.contentPreview).toBe("You are a clinical scribe.");
+    expect(conv[1]?.contentPreview).toBe("术前诊断: 复杂垂体瘤。");
+    expect(conv[2]?.contentPreview).toBe("Calling diagnosis lookup.");
+    expect(conv[3]).toMatchObject({ name: "lookup_diagnosis" });
+    expect(conv[3]?.contentPreview).toContain("D35.2");
+  });
+
+  it("extracts conversation turns from OTel GenAI span events", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    const dashboardUrl = addressUrl(running.dashboard);
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, {
+      resourceSpans: [
+        {
+          resource: { attributes: [{ key: "service.name", value: { stringValue: "chat-api" } }] },
+          scopeSpans: [
+            {
+              scope: { name: "openai" },
+              spans: [
+                {
+                  traceId: "11111111111111111111111111111111",
+                  spanId: "2222222222222222",
+                  name: "chat gpt-4.1",
+                  kind: 3,
+                  startTimeUnixNano: "1715840000000000000",
+                  endTimeUnixNano: "1715840000840000000",
+                  attributes: [
+                    { key: "gen_ai.system", value: { stringValue: "openai" } },
+                    { key: "gen_ai.request.model", value: { stringValue: "gpt-4.1" } }
+                  ],
+                  events: [
+                    {
+                      timeUnixNano: "1715840000100000000",
+                      name: "gen_ai.system.message",
+                      attributes: [
+                        { key: "gen_ai.system", value: { stringValue: "openai" } },
+                        { key: "content", value: { stringValue: "You are a clinical scribe." } }
+                      ]
+                    },
+                    {
+                      timeUnixNano: "1715840000200000000",
+                      name: "gen_ai.user.message",
+                      attributes: [
+                        { key: "gen_ai.system", value: { stringValue: "openai" } },
+                        {
+                          key: "content",
+                          value: {
+                            arrayValue: {
+                              values: [
+                                {
+                                  kvlistValue: {
+                                    values: [
+                                      { key: "type", value: { stringValue: "text" } },
+                                      { key: "text", value: { stringValue: "术前诊断: 复杂垂体瘤。" } }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      timeUnixNano: "1715840000700000000",
+                      name: "gen_ai.choice",
+                      attributes: [
+                        { key: "index", value: { intValue: "0" } },
+                        { key: "finish_reason", value: { stringValue: "tool_calls" } },
+                        {
+                          key: "message",
+                          value: {
+                            stringValue: JSON.stringify({
+                              role: "assistant",
+                              content: "Calling search tool.",
+                              tool_calls: [
+                                {
+                                  id: "call_1",
+                                  type: "function",
+                                  function: { name: "lookup_diagnosis", arguments: "{\"icd\":\"D35.2\"}" }
+                                }
+                              ]
+                            })
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  status: { code: 1 }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+
+    const detail = await fetchJson<{ trace: { genAi: { conversation: Array<{ role: string; kind: string; name?: string; contentPreview: string }> } } }>(
+      `${dashboardUrl}/api/traces/11111111111111111111111111111111`
+    );
+    const conv = detail.trace.genAi.conversation;
+    expect(conv.map((t) => `${t.role}:${t.kind}`)).toEqual([
+      "system:message",
+      "user:message",
+      "assistant:message",
+      "tool:tool-call"
+    ]);
+    expect(conv[0]?.contentPreview).toBe("You are a clinical scribe.");
+    expect(conv[1]?.contentPreview).toContain("术前诊断: 复杂垂体瘤。");
+    expect(conv[2]?.contentPreview).toBe("Calling search tool.");
+    expect(conv[3]).toMatchObject({ name: "lookup_diagnosis", contentPreview: "{\"icd\":\"D35.2\"}" });
+  });
+
   it("reconstructs GenAI conversation turns", async () => {
     running = await startServers({
       host: "127.0.0.1",
@@ -455,7 +668,8 @@ describe("OTLP HTTP receiver", () => {
       `${dashboardUrl}/api/traces/11111111111111111111111111111111`
     );
     expect(detail.trace.genAi.conversation.map((turn) => turn.role)).toEqual(["user", "assistant", "tool"]);
-    expect(detail.trace.genAi.conversation[0]?.contentPreview).toContain("[redacted");
+    expect(detail.trace.genAi.conversation[0]?.contentPreview).toBe("What changed in the checkout service?");
+    expect(detail.trace.genAi.conversation[1]?.contentPreview).toBe("The checkout service emitted correlated traces and logs.");
   });
 
   it("paginates and filters traces, logs, and metric series by time range", async () => {
@@ -509,6 +723,52 @@ describe("OTLP HTTP receiver", () => {
     );
     expect(metricSeries.series.map((point) => point.value)).toEqual([18.25]);
     expect(metricSeries.nextCursor).toBeUndefined();
+  });
+
+  it("filters GenAI traces by time window and service", async () => {
+    running = await startServers({
+      host: "127.0.0.1",
+      dashboardPort: 0,
+      otlpHttpPort: 0,
+      otlpGrpcPort: 0,
+      storage: "memory",
+      dbPath: ":memory:",
+      maxBatches: 100,
+      maxLogs: 100,
+      maxSpans: 100,
+      maxMetrics: 100
+    });
+
+    const dashboardUrl = addressUrl(running.dashboard);
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      traceId: "11111111111111111111111111111111",
+      spanId: "2222222222222222",
+      name: "old genai trace",
+      startTimeUnixNano: "1715840000000000000",
+      endTimeUnixNano: "1715840000840000000"
+    }));
+    await postJson(`${addressUrl(running.otlp)}/v1/traces`, tracePayload({
+      traceId: "33333333333333333333333333333333",
+      spanId: "4444444444444444",
+      name: "recent genai trace",
+      startTimeUnixNano: "1715840002000000000",
+      endTimeUnixNano: "1715840002840000000"
+    }));
+
+    const all = await fetchJson<{ traces: Array<{ traceId: string }> }>(`${dashboardUrl}/api/genai/traces`);
+    expect(all.traces.map((trace) => trace.traceId).sort()).toEqual([
+      "11111111111111111111111111111111",
+      "33333333333333333333333333333333"
+    ]);
+
+    const filtered = await fetchJson<{ traces: Array<{ traceId: string }> }>(`${dashboardUrl}/api/genai/traces?from=1715840001500`);
+    expect(filtered.traces.map((trace) => trace.traceId)).toEqual(["33333333333333333333333333333333"]);
+
+    const byService = await fetchJson<{ traces: Array<{ traceId: string }> }>(`${dashboardUrl}/api/genai/traces?service=checkout-api&limit=1`);
+    expect(byService.traces).toHaveLength(1);
+
+    const byOther = await fetchJson<{ traces: Array<{ traceId: string }> }>(`${dashboardUrl}/api/genai/traces?service=nonexistent`);
+    expect(byOther.traces).toHaveLength(0);
   });
 });
 

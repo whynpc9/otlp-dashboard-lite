@@ -2,6 +2,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { dirname } from "node:path";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import type {
+  GenAiTraceListQuery,
   IngestBatch,
   IngestResult,
   LogQuery,
@@ -337,8 +338,15 @@ export class SqliteTelemetryStore implements TelemetryStore {
       }));
   }
 
-  listGenAiTraces(): TraceSummary[] {
-    return this.listTraces({ limit: 100 }).filter((trace) => trace.genAiSpanCount > 0);
+  listGenAiTraces(query: GenAiTraceListQuery = {}): TraceSummary[] {
+    return this.listTraces({
+      service: query.service,
+      q: query.q,
+      fromUnixNano: query.fromUnixNano,
+      toUnixNano: query.toUnixNano,
+      offset: query.offset,
+      limit: query.limit ?? 100
+    }).filter((trace) => trace.genAiSpanCount > 0);
   }
 
   exportData() {

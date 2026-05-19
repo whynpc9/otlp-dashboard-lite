@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseBytes, parseDurationMs, readConfig, type ServerConfig } from "@devdash/server/config";
-import { startServers } from "@devdash/server/server";
+import { parseBytes, parseDurationMs, readConfig, type ServerConfig } from "@local-otel/server/config";
+import { startServers } from "@local-otel/server/server";
 
 const argv = process.argv.slice(2);
 if (argv[0] === "--") {
@@ -43,7 +43,7 @@ if (command === "serve") {
   const baseUrl = readOption(args, "--dashboard-url") ?? "http://127.0.0.1:18888";
   const file = args.find((arg) => !arg.startsWith("--"));
   if (!file) {
-    throw new Error("Usage: devdash import <file>");
+    throw new Error("Usage: otel-workbench import <file>");
   }
   const payload = await readFile(file, "utf8");
   const response = await fetch(`${baseUrl}/api/import`, {
@@ -69,13 +69,13 @@ if (command === "serve") {
   console.log(await response.text());
 } else if (command === "mcp") {
   const dashboardUrl = readOption(args, "--dashboard-url") ?? "http://127.0.0.1:18888";
-  const { runMcpServer } = await import("@devdash/server/mcp");
+  const { runMcpServer } = await import("@local-otel/server/mcp");
   await runMcpServer({ dashboardUrl });
 } else if (command === "mcp-http") {
   const dashboardUrl = readOption(args, "--dashboard-url") ?? "http://127.0.0.1:18888";
   const host = readOption(args, "--host") ?? "127.0.0.1";
   const port = numberOption(args, "--port") ?? 18889;
-  const { runMcpHttpServer } = await import("@devdash/server/mcp");
+  const { runMcpHttpServer } = await import("@local-otel/server/mcp");
   await runMcpHttpServer({ dashboardUrl, host, port });
 } else if (command === "open") {
   const baseUrl = readOption(args, "--dashboard-url") ?? "http://127.0.0.1:18888";
@@ -83,7 +83,7 @@ if (command === "serve") {
   await import("node:child_process").then(({ execFile }) => execFile(open, [baseUrl]));
 } else {
   console.error(`Unknown command: ${command}`);
-  console.error("Usage: devdash serve|clear|export|import|retention|mcp|mcp-http|open");
+  console.error("Usage: otel-workbench serve|clear|export|import|retention|mcp|mcp-http|open");
   process.exit(1);
 }
 

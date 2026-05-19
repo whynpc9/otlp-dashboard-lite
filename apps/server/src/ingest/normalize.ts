@@ -1,9 +1,9 @@
 import { nanoid } from "nanoid";
 import { fromBinary } from "@bufbuild/protobuf";
-import { ExportLogsServiceRequestSchema } from "@devdash/otel-proto/generated/opentelemetry/proto/collector/logs/v1/logs_service_pb";
-import { ExportMetricsServiceRequestSchema } from "@devdash/otel-proto/generated/opentelemetry/proto/collector/metrics/v1/metrics_service_pb";
-import { ExportTraceServiceRequestSchema } from "@devdash/otel-proto/generated/opentelemetry/proto/collector/trace/v1/trace_service_pb";
-import type { AnyValue, InstrumentationScope, KeyValue } from "@devdash/otel-proto/generated/opentelemetry/proto/common/v1/common_pb";
+import { ExportLogsServiceRequestSchema } from "@local-otel/otel-proto/generated/opentelemetry/proto/collector/logs/v1/logs_service_pb";
+import { ExportMetricsServiceRequestSchema } from "@local-otel/otel-proto/generated/opentelemetry/proto/collector/metrics/v1/metrics_service_pb";
+import { ExportTraceServiceRequestSchema } from "@local-otel/otel-proto/generated/opentelemetry/proto/collector/trace/v1/trace_service_pb";
+import type { AnyValue, InstrumentationScope, KeyValue } from "@local-otel/otel-proto/generated/opentelemetry/proto/common/v1/common_pb";
 import type {
   Exemplar,
   ExponentialHistogramDataPoint,
@@ -11,9 +11,9 @@ import type {
   Metric as OtlpMetric,
   NumberDataPoint,
   SummaryDataPoint
-} from "@devdash/otel-proto/generated/opentelemetry/proto/metrics/v1/metrics_pb";
-import type { Resource } from "@devdash/otel-proto/generated/opentelemetry/proto/resource/v1/resource_pb";
-import type { Span as OtlpSpan, Span_Event, Span_Link } from "@devdash/otel-proto/generated/opentelemetry/proto/trace/v1/trace_pb";
+} from "@local-otel/otel-proto/generated/opentelemetry/proto/metrics/v1/metrics_pb";
+import type { Resource } from "@local-otel/otel-proto/generated/opentelemetry/proto/resource/v1/resource_pb";
+import type { Span as OtlpSpan, Span_Event, Span_Link } from "@local-otel/otel-proto/generated/opentelemetry/proto/trace/v1/trace_pb";
 import type { AttributeMap, IngestBatch, NormalizedLogRecord, NormalizedMetricPoint, NormalizedSpan, OtlpProtocol, RawOtlpBatch, TelemetrySignal } from "../store/types.js";
 import { redactAttribute, redactLogBody } from "./redact.js";
 
@@ -111,7 +111,7 @@ function normalizeTraceJson(payload: unknown, batchId: string): NormalizedSpan[]
           resource,
           scope,
           attributes: attributesToMap(span.attributes),
-          events: arrayOrEmpty(span.events),
+          events: arrayOrEmpty(span.events).map(spanEventJsonToNormalized),
           links: arrayOrEmpty(span.links),
           batchId
         });
@@ -646,6 +646,16 @@ function spanEventToJson(event: Span_Event) {
     timeUnixNano: nanoString(event.timeUnixNano),
     name: event.name,
     attributes: keyValuesToMap(event.attributes)
+  };
+}
+
+function spanEventJsonToNormalized(event: unknown): Record<string, unknown> {
+  const record = (event ?? {}) as Record<string, unknown>;
+  const time = record.timeUnixNano;
+  return {
+    timeUnixNano: typeof time === "string" ? time : String(time ?? "0"),
+    name: typeof record.name === "string" ? record.name : "",
+    attributes: attributesToMap(record.attributes)
   };
 }
 

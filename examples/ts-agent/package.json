@@ -1,5 +1,5 @@
 {
-  "name": "devdash-ts-agent-smoke",
+  "name": "otel-workbench-ts-agent-smoke",
   "private": true,
   "type": "module",
   "scripts": {

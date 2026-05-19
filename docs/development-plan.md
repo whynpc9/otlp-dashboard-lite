@@ -1,6 +1,6 @@
-# Local OTLP Workbench for Microservices + AI Agents 开发计划
+# Local OTel Workbench for Microservices + AI Agents 开发计划
 
-> 本文把项目目标按 **OTLP/OpenTelemetry Protocol** 理解。当前目录名是 `oltp-dashboard-lite`，但产品、代码和文档建议统一使用 `OTLP`，避免和数据库事务场景里的 `OLTP` 混淆。
+> 本文把项目目标统一命名为 **Local OTel Workbench**。`OTel` 指 OpenTelemetry 整体生态，`OTLP` 仅保留在协议接收、endpoint、exporter 配置等具体能力描述中，避免和数据库事务场景里的 `OLTP` 混淆。
 
 ## 1. 项目定位
 
@@ -98,7 +98,7 @@
 ## 5. 建议目录结构
 
 ```text
-oltp-dashboard-lite/
+local-otel-workbench/
   apps/
     server/
       src/
@@ -515,7 +515,7 @@ MCP 输出原则：
 最终用户路径：
 
 ```bash
-npx @your-scope/devdash serve
+npx local-otel-workbench serve
 ```
 
 输出：
@@ -530,13 +530,13 @@ Storage:        memory
 命令：
 
 ```bash
-devdash serve
-devdash serve --storage sqlite --db ./.otel/devdash.db --retention 7d --max-db-size 2gb
-devdash open
-devdash clear
-devdash export --format otlp-json --out ./telemetry.json
-devdash import ./telemetry.json
-devdash mcp --dashboard-url http://localhost:18888
+otel-workbench serve
+otel-workbench serve --storage sqlite --db ./.otel/local-otel-workbench.db --retention 7d --max-db-size 2gb
+otel-workbench open
+otel-workbench clear
+otel-workbench export --format otlp-json --out ./telemetry.json
+otel-workbench import ./telemetry.json
+otel-workbench mcp --dashboard-url http://localhost:18888
 ```
 
 ## 12. 分阶段实施路线
@@ -625,7 +625,7 @@ devdash mcp --dashboard-url http://localhost:18888
 
 验收：
 
-- `devdash serve --storage sqlite --db ./.otel/devdash.db` 重启后数据仍在。
+- `otel-workbench serve --storage sqlite --db ./.otel/local-otel-workbench.db` 重启后数据仍在。
 - trace list 查询不扫描 raw payload。
 - retention 能清理过期 batch 和派生索引。
 - counter/gauge/histogram 至少能入库和基础展示。
@@ -687,11 +687,11 @@ devdash mcp --dashboard-url http://localhost:18888
 - gRPC `LogsService.Export`
 - gRPC `MetricsService.Export`
 - MCP stdio server
-- `devdash serve`
-- `devdash open`
-- `devdash clear`
-- `devdash export/import`
-- `devdash mcp`
+- `otel-workbench serve`
+- `otel-workbench open`
+- `otel-workbench clear`
+- `otel-workbench export/import`
+- `otel-workbench mcp`
 
 验收：
 
@@ -798,7 +798,7 @@ server:
 
 storage:
   type: "memory"
-  db: "./.otel/devdash.db"
+  db: "./.otel/local-otel-workbench.db"
   retention: "7d"
   maxDbSize: "2gb"
   maxMemorySpans: 50000
@@ -884,7 +884,7 @@ Phase 1 完成后，再决定 SQLite 是直接开 Phase 2，还是先补 OTLP/gR
 
 MVP 完成定义：
 
-- 用户能运行 `devdash serve`。
+- 用户能运行 `otel-workbench serve`。
 - dashboard 在 `http://localhost:18888` 可访问。
 - OTLP/HTTP 在 `http://localhost:4318` 可接收 traces/logs。
 - 至少一个 .NET 或 Python 示例能看到 trace waterfall 和 correlated logs。

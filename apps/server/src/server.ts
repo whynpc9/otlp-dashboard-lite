@@ -51,7 +51,7 @@ export async function startServers(config: ServerConfig): Promise<RunningServers
   } else {
     dashboard.get("/", async () => {
       return {
-        name: "Local OTLP Workbench",
+        name: "Local OTel Workbench",
         message: "Build apps/web or run pnpm dev for the dashboard UI.",
         api: "/api/health"
       };
