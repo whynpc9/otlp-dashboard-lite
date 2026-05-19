@@ -169,6 +169,22 @@ function useTheme(): [ThemeMode, (mode: ThemeMode) => void] {
   return [mode, setMode];
 }
 
+// Anthropic-style 4-spoke radial spike mark — the brand wordmark prefix.
+function SpikeMark({ size = 20 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M12 1.5c.55 4.05 1.4 6.55 2.6 7.9 1.2 1.3 3.7 2.15 7.9 2.6-4.2.45-6.7 1.3-7.9 2.6-1.2 1.35-2.05 3.85-2.6 7.9-.55-4.05-1.4-6.55-2.6-7.9-1.2-1.3-3.7-2.15-7.9-2.6 4.2-.45 6.7-1.3 7.9-2.6 1.2-1.35 2.05-3.85 2.6-7.9z" />
+    </svg>
+  );
+}
+
 export function App() {
   const [activePage, setActivePage] = useState<PageKey>("Resources");
   const [selectedTraceId, setSelectedTraceId] = useState("");
@@ -269,7 +285,7 @@ export function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
-            <Activity size={18} />
+            <SpikeMark />
           </div>
           <div>
             <strong>OTel Workbench</strong>
