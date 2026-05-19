@@ -14,6 +14,7 @@ import type {
   NormalizedSpan,
   RawOtlpBatch,
   RetentionPolicy,
+  SpanQuery,
   TraceDetail,
   TraceListQuery,
   TraceSummary,
@@ -158,6 +159,44 @@ export class MemoryTelemetryStore implements TelemetryStore {
       logs,
       genAi: summarizeGenAi(spans)
     };
+  }
+
+  listSpans(query: SpanQuery): NormalizedSpan[] {
+    let rows = [...this.spans];
+
+    if (query.service) {
+      rows = rows.filter((span) => span.serviceName === query.service);
+    }
+    if (query.traceId) {
+      rows = rows.filter((span) => span.traceId === query.traceId);
+    }
+    if (query.hasError !== undefined) {
+      rows = rows.filter((span) => (Number(span.statusCode ?? 0) >= 2) === query.hasError);
+    }
+    if (query.minDurationMs !== undefined) {
+      rows = rows.filter((span) => span.durationNano >= query.minDurationMs! * 1_000_000);
+    }
+    if (query.fromUnixNano) {
+      rows = rows.filter((span) => span.endTimeUnixNano >= query.fromUnixNano!);
+    }
+    if (query.toUnixNano) {
+      rows = rows.filter((span) => span.startTimeUnixNano <= query.toUnixNano!);
+    }
+    if (query.q) {
+      const q = query.q.toLowerCase();
+      rows = rows.filter((span) => {
+        return (
+          span.name.toLowerCase().includes(q) ||
+          span.traceId.includes(q) ||
+          span.spanId.includes(q) ||
+          JSON.stringify(span.attributes).toLowerCase().includes(q)
+        );
+      });
+    }
+
+    return rows
+      .sort((a, b) => Number(b.startTimeUnixNano) - Number(a.startTimeUnixNano))
+      .slice(query.offset ?? 0, (query.offset ?? 0) + query.limit);
   }
 
   listLogs(query: LogQuery): NormalizedLogRecord[] {

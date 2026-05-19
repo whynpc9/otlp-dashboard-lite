@@ -1,0 +1,4 @@
+interface:
+  display_name: "Local OTel Workbench"
+  short_description: "Use a local OTLP dashboard from CLI"
+  default_prompt: "Use $local-otel-workbench to start local OTLP observability and query logs, traces, and spans."

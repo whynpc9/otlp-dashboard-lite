@@ -3,15 +3,25 @@
   "private": true,
   "version": "0.1.0",
   "description": "Local OTel Workbench for microservices and AI agents.",
+  "license": "MIT",
+  "homepage": "https://github.com/whynpc9/local-otel-workbench#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/whynpc9/local-otel-workbench.git"
+  },
+  "bugs": {
+    "url": "https://github.com/whynpc9/local-otel-workbench/issues"
+  },
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"pnpm --filter @local-otel/server dev\" \"pnpm --filter @local-otel/web dev\"",
+    "dev": "concurrently -n server,web -c blue,green \"pnpm --filter local-otel-server dev\" \"pnpm --filter @local-otel/web dev\"",
     "serve": "pnpm --filter local-otel-workbench start -- serve",
-    "build": "pnpm -r build",
+    "build": "pnpm -r build && pnpm --filter local-otel-workbench package:web",
     "check": "pnpm -r check",
     "test": "pnpm -r test",
-    "proto:generate": "pnpm --filter @local-otel/otel-proto generate",
-    "release:dry-run": "./scripts/release-dry-run.sh"
+    "proto:generate": "pnpm --filter local-otel-otel-proto generate",
+    "release:dry-run": "./scripts/release-dry-run.sh",
+    "publish:preflight": "./scripts/npm-publish-preflight.sh"
   },
   "engines": {
     "node": ">=22"
@@ -19,6 +29,7 @@
   "devDependencies": {
     "@types/node": "^22.15.21",
     "concurrently": "^9.1.2",
+    "esbuild": "^0.25.0",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "vitest": "^3.1.4"

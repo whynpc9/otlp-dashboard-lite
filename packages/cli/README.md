@@ -198,38 +198,9 @@ Use it to teach coding agents how to:
 - query logs, traces, spans, and resources,
 - validate telemetry after a code change.
 
-## Local Development
-
-```bash
-pnpm install
-pnpm check
-pnpm test
-pnpm build
-pnpm serve
-```
-
-Run the web app and server in development mode:
-
-```bash
-pnpm dev
-```
-
-Prepare for npm publishing without publishing:
-
-```bash
-pnpm publish:preflight
-```
-
-Publish the single public package:
-
-```bash
-pnpm --filter local-otel-workbench publish --access public
-```
-
 ## Notes
 
 - The npm package is a single package: `local-otel-workbench`.
-- Internal server and OTLP proto workspace packages are bundled into the CLI build and are not published separately.
 - SQLite uses Node 22's built-in `node:sqlite` module. Node may print an experimental warning when SQLite storage is used.
 - This tool is intended for local development and debugging. Do not expose it as a production observability endpoint without adding appropriate authentication and network controls.
 

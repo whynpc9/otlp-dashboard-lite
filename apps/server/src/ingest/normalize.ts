@@ -1,9 +1,9 @@
 import { nanoid } from "nanoid";
 import { fromBinary } from "@bufbuild/protobuf";
-import { ExportLogsServiceRequestSchema } from "@local-otel/otel-proto/generated/opentelemetry/proto/collector/logs/v1/logs_service_pb";
-import { ExportMetricsServiceRequestSchema } from "@local-otel/otel-proto/generated/opentelemetry/proto/collector/metrics/v1/metrics_service_pb";
-import { ExportTraceServiceRequestSchema } from "@local-otel/otel-proto/generated/opentelemetry/proto/collector/trace/v1/trace_service_pb";
-import type { AnyValue, InstrumentationScope, KeyValue } from "@local-otel/otel-proto/generated/opentelemetry/proto/common/v1/common_pb";
+import { ExportLogsServiceRequestSchema } from "local-otel-otel-proto/generated/opentelemetry/proto/collector/logs/v1/logs_service_pb";
+import { ExportMetricsServiceRequestSchema } from "local-otel-otel-proto/generated/opentelemetry/proto/collector/metrics/v1/metrics_service_pb";
+import { ExportTraceServiceRequestSchema } from "local-otel-otel-proto/generated/opentelemetry/proto/collector/trace/v1/trace_service_pb";
+import type { AnyValue, InstrumentationScope, KeyValue } from "local-otel-otel-proto/generated/opentelemetry/proto/common/v1/common_pb";
 import type {
   Exemplar,
   ExponentialHistogramDataPoint,
@@ -11,9 +11,9 @@ import type {
   Metric as OtlpMetric,
   NumberDataPoint,
   SummaryDataPoint
-} from "@local-otel/otel-proto/generated/opentelemetry/proto/metrics/v1/metrics_pb";
-import type { Resource } from "@local-otel/otel-proto/generated/opentelemetry/proto/resource/v1/resource_pb";
-import type { Span as OtlpSpan, Span_Event, Span_Link } from "@local-otel/otel-proto/generated/opentelemetry/proto/trace/v1/trace_pb";
+} from "local-otel-otel-proto/generated/opentelemetry/proto/metrics/v1/metrics_pb";
+import type { Resource } from "local-otel-otel-proto/generated/opentelemetry/proto/resource/v1/resource_pb";
+import type { Span as OtlpSpan, Span_Event, Span_Link } from "local-otel-otel-proto/generated/opentelemetry/proto/trace/v1/trace_pb";
 import type { AttributeMap, IngestBatch, NormalizedLogRecord, NormalizedMetricPoint, NormalizedSpan, OtlpProtocol, RawOtlpBatch, TelemetrySignal } from "../store/types.js";
 import { redactAttribute, redactLogBody } from "./redact.js";
 

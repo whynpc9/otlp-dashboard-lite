@@ -11,6 +11,13 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "local-otel-server/config": ["apps/server/src/config.ts"],
+      "local-otel-server/server": ["apps/server/src/server.ts"],
+      "local-otel-server/mcp": ["apps/server/src/mcp/server.ts"],
+      "local-otel-otel-proto/generated/*": ["packages/otel-proto/generated/*"]
+    }
   }
 }

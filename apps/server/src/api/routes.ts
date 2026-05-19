@@ -40,6 +40,26 @@ export function registerApiRoutes(app: FastifyInstance, store: TelemetryStore) {
     return { trace };
   });
 
+  app.get("/api/spans", async (request) => {
+    const query = request.query as Record<string, string | undefined>;
+    const page = pageQuery(query);
+    const spans = store.listSpans({
+      service: query.service || undefined,
+      traceId: query.traceId || undefined,
+      q: query.q || undefined,
+      hasError: parseBoolean(query.hasError),
+      minDurationMs: query.minDurationMs ? Number(query.minDurationMs) : undefined,
+      fromUnixNano: parseTimeUnixNano(query.from),
+      toUnixNano: parseTimeUnixNano(query.to),
+      offset: page.offset,
+      limit: page.limit + 1
+    });
+    return {
+      spans: spans.slice(0, page.limit),
+      nextCursor: spans.length > page.limit ? String(page.offset + page.limit) : undefined
+    };
+  });
+
   app.get("/api/logs", async (request) => {
     const query = request.query as Record<string, string | undefined>;
     const page = pageQuery(query);

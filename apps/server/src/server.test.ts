@@ -769,7 +769,7 @@ describe("OTLP HTTP receiver", () => {
     expect(detail.trace.genAi.conversation[1]?.contentPreview).toBe("The checkout service emitted correlated traces and logs.");
   });
 
-  it("paginates and filters traces, logs, and metric series by time range", async () => {
+  it("paginates and filters traces, spans, logs, and metric series by time range", async () => {
     running = await startServers({
       host: "127.0.0.1",
       dashboardPort: 0,
@@ -811,6 +811,14 @@ describe("OTLP HTTP receiver", () => {
 
     const filteredTraces = await fetchJson<{ traces: Array<{ traceId: string }> }>(`${dashboardUrl}/api/traces?from=1715840000900`);
     expect(filteredTraces.traces.map((trace) => trace.traceId)).toEqual(["33333333333333333333333333333333"]);
+
+    const filteredSpans = await fetchJson<{ spans: Array<{ traceId: string; name: string }>; nextCursor?: string }>(
+      `${dashboardUrl}/api/spans?service=checkout-api&q=new&limit=1`
+    );
+    expect(filteredSpans.spans).toEqual([
+      expect.objectContaining({ traceId: "33333333333333333333333333333333", name: "new trace" })
+    ]);
+    expect(filteredSpans.nextCursor).toBeUndefined();
 
     const filteredLogs = await fetchJson<{ logs: unknown[] }>(`${dashboardUrl}/api/logs?from=1715840000500`);
     expect(filteredLogs.logs).toHaveLength(0);
