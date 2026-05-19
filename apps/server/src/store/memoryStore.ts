@@ -480,8 +480,8 @@ export function summarizeGenAi(spans: NormalizedSpan[]): GenAiTraceSummary {
 
 function classifyGenAiSpan(span: NormalizedSpan) {
   const attrs = span.attributes;
-  const system = readString(attrs, "gen_ai.system") ?? readString(attrs, "llm.system") ?? readString(attrs, "llm.provider");
-  const operation = readString(attrs, "gen_ai.operation.name") ?? readString(attrs, "llm.operation");
+  const system = readFirstString(attrs, ["gen_ai.system", "gen_ai.provider.name", "llm.system", "llm.provider", "ai.model.provider"]);
+  const operation = readFirstString(attrs, ["gen_ai.operation.name", "llm.operation", "ai.operationId", "operation.name"]);
   const openInferenceKind = readString(attrs, "openinference.span.kind")?.toLowerCase();
   const name = span.name.toLowerCase();
   let kind = "unknown";
@@ -517,11 +517,11 @@ function classifyGenAiSpan(span: NormalizedSpan) {
     startTimeUnixNano: span.startTimeUnixNano,
     durationNano: span.durationNano,
     error: Number(span.statusCode ?? 0) >= 2,
-    provider: readString(attrs, "gen_ai.system") ?? readString(attrs, "llm.provider") ?? readString(attrs, "ai.provider"),
-    model: readString(attrs, "gen_ai.request.model") ?? readString(attrs, "llm.model_name") ?? readString(attrs, "gen_ai.response.model") ?? readString(attrs, "model_name"),
-    inputTokens: readNumber(attrs, "gen_ai.usage.input_tokens") ?? readNumber(attrs, "llm.token_count.prompt") ?? readNumber(attrs, "llm.usage.prompt_tokens"),
-    outputTokens: readNumber(attrs, "gen_ai.usage.output_tokens") ?? readNumber(attrs, "llm.token_count.completion") ?? readNumber(attrs, "llm.usage.completion_tokens"),
-    toolName: readString(attrs, "tool.name") ?? readString(attrs, "mcp.tool.name") ?? readString(attrs, "function.name"),
+    provider: readFirstString(attrs, ["gen_ai.system", "gen_ai.provider.name", "llm.provider", "ai.provider", "ai.model.provider"]),
+    model: readFirstString(attrs, ["gen_ai.request.model", "llm.model_name", "gen_ai.response.model", "ai.response.model", "ai.model.id", "model_name"]),
+    inputTokens: readNumber(attrs, "gen_ai.usage.input_tokens") ?? readNumber(attrs, "llm.token_count.prompt") ?? readNumber(attrs, "llm.usage.prompt_tokens") ?? readNumber(attrs, "ai.usage.promptTokens"),
+    outputTokens: readNumber(attrs, "gen_ai.usage.output_tokens") ?? readNumber(attrs, "llm.token_count.completion") ?? readNumber(attrs, "llm.usage.completion_tokens") ?? readNumber(attrs, "ai.usage.completionTokens"),
+    toolName: readString(attrs, "tool.name") ?? readString(attrs, "mcp.tool.name") ?? readString(attrs, "function.name") ?? readString(attrs, "ai.toolCall.name"),
     retrievedDocCount: readNumber(attrs, "retrieval.documents.count") ?? readNumber(attrs, "rag.retrieved_doc_count") ?? readNumber(attrs, "retrieved_document_count"),
     retrievedDocuments: extractRagDocuments(attrs),
     conversationTurns: extractConversationTurns(span),
@@ -615,17 +615,21 @@ function extractConversationTurns(span: NormalizedSpan) {
   const toolName = readString(attrs, "tool.name")
     ?? readString(attrs, "mcp.tool.name")
     ?? readString(attrs, "function.name")
-    ?? readString(attrs, "gen_ai.tool.name");
+    ?? readString(attrs, "gen_ai.tool.name")
+    ?? readString(attrs, "ai.toolCall.name");
 
   addTurn(turns, span, "system", "message", readFirstString(attrs, ["gen_ai.system.message", "llm.system", "system"]));
   addTurn(turns, span, "user", "message", readFirstString(attrs, [
     "gen_ai.prompt",
     "gen_ai.input",
+    "ai.prompt",
     "llm.prompt",
     "input.value",
     "input",
     "openinference.input.value"
   ]));
+  addTurnsFromIndexedMessages(turns, span, attrs, "gen_ai.prompt", toolName, "user");
+  addTurnsFromMessagesArray(turns, span, attrs["ai.prompt.messages"], toolName, "user");
   const assistantReasoning = readFirstString(attrs, [
     "gen_ai.response.reasoning_content",
     "gen_ai.response.reasoning",
@@ -646,6 +650,7 @@ function extractConversationTurns(span: NormalizedSpan) {
     readFirstString(attrs, [
       "gen_ai.completion",
       "gen_ai.output",
+      "ai.response.text",
       "llm.completion",
       "output.value",
       "output",
@@ -654,6 +659,8 @@ function extractConversationTurns(span: NormalizedSpan) {
     undefined,
     assistantReasoning
   );
+  addTurnsFromIndexedMessages(turns, span, attrs, "gen_ai.completion", toolName, "assistant");
+  addTurnsFromMessagesArray(turns, span, attrs["ai.response.messages"], toolName, "assistant");
   addTurn(turns, span, "tool", "tool-call", readFirstString(attrs, [
     "tool.input",
     "tool.args",
@@ -661,20 +668,23 @@ function extractConversationTurns(span: NormalizedSpan) {
     "tool.parameters",
     "mcp.tool.arguments",
     "function.arguments",
-    "gen_ai.tool.arguments"
+    "gen_ai.tool.arguments",
+    "ai.toolCall.args"
   ]), toolName);
   addTurn(turns, span, "tool", "tool-result", readFirstString(attrs, [
     "tool.output",
     "tool.result",
     "mcp.tool.result",
     "function.result",
-    "gen_ai.tool.result"
+    "gen_ai.tool.result",
+    "ai.toolCall.result"
   ]), toolName);
 
   // Newer OTel GenAI semconv (≈2.x experimental): single structured array attributes that hold
   // every input/output message with role + typed parts.
   addTurnsFromMessagesArray(turns, span, attrs["gen_ai.input.messages"], toolName, "user");
   addTurnsFromMessagesArray(turns, span, attrs["gen_ai.output.messages"], toolName, "assistant");
+  addTurnsFromToolCalls(turns, span, attrs["ai.response.toolCalls"], toolName);
 
   for (const event of span.events) {
     const eventRecord = isRecord(event) ? event : {};
@@ -716,6 +726,40 @@ function extractConversationTurns(span: NormalizedSpan) {
   }
 
   return turns;
+}
+
+function addTurnsFromIndexedMessages(
+  turns: ConversationTurnDraft[],
+  span: NormalizedSpan,
+  attrs: Record<string, unknown>,
+  prefix: string,
+  fallbackToolName: string | undefined,
+  defaultRole: "user" | "assistant"
+) {
+  const grouped = new Map<string, Record<string, unknown>>();
+  const pattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.(\\d+)\\.(.+)$`);
+  for (const [key, value] of Object.entries(attrs)) {
+    const match = key.match(pattern);
+    if (!match) {
+      continue;
+    }
+    const index = match[1]!;
+    const field = match[2]!;
+    const message = grouped.get(index) ?? {};
+    message[field] = value;
+    grouped.set(index, message);
+  }
+
+  for (const index of [...grouped.keys()].sort((a, b) => Number(a) - Number(b))) {
+    const message = grouped.get(index)!;
+    const role = conversationRole(readString(message, "role")) ?? defaultRole;
+    const content = extractMessageContent(message);
+    const reasoning = extractReasoningContent(message);
+    if (content || reasoning) {
+      addTurn(turns, span, role, role === "tool" ? "tool-result" : "message", content ?? "", fallbackToolName, reasoning);
+    }
+    addTurnsFromToolCalls(turns, span, message.tool_calls, fallbackToolName);
+  }
 }
 
 // Handles the newer OTel GenAI structured `messages` array, where each entry has
