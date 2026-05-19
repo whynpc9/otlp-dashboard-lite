@@ -135,6 +135,35 @@ otel-workbench import ./telemetry.json
 otel-workbench retention --retention 7d --max-logs 100000 --max-metrics 100000
 ```
 
+### Server configuration
+
+The `serve` command reads configuration from environment variables. Each name is prefixed with `LOCAL_OTEL_WORKBENCH_` (or the shorter alias `DEVDASH_`).
+
+```text
+LOCAL_OTEL_WORKBENCH_HOST              Bind address. Default: 127.0.0.1
+LOCAL_OTEL_WORKBENCH_DASHBOARD_PORT    Dashboard HTTP port. Default: 18888
+LOCAL_OTEL_WORKBENCH_OTLP_HTTP_PORT    OTLP/HTTP receiver port. Default: 4318
+LOCAL_OTEL_WORKBENCH_OTLP_GRPC_PORT    OTLP/gRPC receiver port. Default: 4317
+LOCAL_OTEL_WORKBENCH_STORAGE           memory | sqlite. Default: memory
+LOCAL_OTEL_WORKBENCH_DB                SQLite path. Default: ./.otel/local-otel-workbench.db
+LOCAL_OTEL_WORKBENCH_RETENTION         Time-based retention, e.g. 7d, 12h, 30m
+LOCAL_OTEL_WORKBENCH_MAX_DB_SIZE       Max SQLite size, e.g. 2gb, 500mb
+LOCAL_OTEL_WORKBENCH_MAX_TRACES        Cap on retained traces
+LOCAL_OTEL_WORKBENCH_MAX_SPANS         Cap on retained spans. Default: 50000
+LOCAL_OTEL_WORKBENCH_MAX_LOGS          Cap on retained logs. Default: 100000
+LOCAL_OTEL_WORKBENCH_MAX_METRICS       Cap on retained metric points. Default: 100000
+LOCAL_OTEL_WORKBENCH_MAX_BATCHES       Cap on retained ingest batches. Default: 1000
+```
+
+For example, to run the dashboard on a non-default port:
+
+```bash
+LOCAL_OTEL_WORKBENCH_DASHBOARD_PORT=28888 \
+LOCAL_OTEL_WORKBENCH_OTLP_HTTP_PORT=14318 \
+LOCAL_OTEL_WORKBENCH_OTLP_GRPC_PORT=14317 \
+otel-workbench serve
+```
+
 ## HTTP API
 
 The dashboard server exposes a local JSON API:

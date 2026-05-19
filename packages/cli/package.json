@@ -24,6 +24,9 @@
     "url": "https://github.com/whynpc9/local-otel-workbench/issues"
   },
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "bin": {
     "otel-workbench": "./dist/index.js"
   },
