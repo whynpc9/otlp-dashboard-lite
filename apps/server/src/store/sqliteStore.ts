@@ -22,6 +22,8 @@ import type {
 } from "./types.js";
 import { summarizeGenAi } from "./memoryStore.js";
 
+type SqlParam = string | number | null;
+
 export class SqliteTelemetryStore implements TelemetryStore {
   private readonly db: DatabaseSync;
   private readonly dbPath: string;
@@ -190,30 +192,38 @@ export class SqliteTelemetryStore implements TelemetryStore {
 
   listTraces(query: TraceListQuery): TraceSummary[] {
     const offset = query.offset ?? 0;
-    let rows = (this.db.prepare("select * from trace_summaries order by start_time_unix_nano desc limit ?")
-      .all(Math.max((offset + query.limit) * 4, query.limit)) as unknown as SummaryRow[]).map(summaryFromRow);
-
+    const clauses: string[] = [];
+    const params: SqlParam[] = [];
     if (query.service) {
-      rows = rows.filter((trace) => trace.serviceNames.includes(query.service!));
+      clauses.push("service_names like ? escape '\\'");
+      params.push(jsonArrayElementLikePattern(query.service));
     }
     if (query.hasError !== undefined) {
-      rows = rows.filter((trace) => (trace.errorCount > 0) === query.hasError);
+      clauses.push(query.hasError ? "error_count > 0" : "error_count = 0");
     }
     if (query.minDurationMs !== undefined) {
-      rows = rows.filter((trace) => trace.durationNano >= query.minDurationMs! * 1_000_000);
+      clauses.push("duration_nano >= ?");
+      params.push(query.minDurationMs * 1_000_000);
     }
     if (query.fromUnixNano) {
-      rows = rows.filter((trace) => trace.endTimeUnixNano >= query.fromUnixNano!);
+      clauses.push("end_time_unix_nano >= ?");
+      params.push(query.fromUnixNano);
     }
     if (query.toUnixNano) {
-      rows = rows.filter((trace) => trace.startTimeUnixNano <= query.toUnixNano!);
+      clauses.push("start_time_unix_nano <= ?");
+      params.push(query.toUnixNano);
     }
     if (query.q) {
-      const q = query.q.toLowerCase();
-      rows = rows.filter((trace) => trace.rootName.toLowerCase().includes(q) || trace.traceId.includes(q));
+      clauses.push("(lower(root_name) like ? escape '\\' or trace_id like ? escape '\\')");
+      params.push(likePattern(query.q.toLowerCase()), likePattern(query.q));
     }
-
-    return rows.slice(offset, offset + query.limit);
+    const where = clauses.length ? ` where ${clauses.join(" and ")}` : "";
+    return (this.db.prepare(`
+      select * from trace_summaries
+      ${where}
+      order by start_time_unix_nano desc
+      limit ? offset ?
+    `).all(...params, query.limit, offset) as unknown as SummaryRow[]).map(summaryFromRow);
   }
 
   getTrace(traceId: string): TraceDetail | undefined {
@@ -236,38 +246,70 @@ export class SqliteTelemetryStore implements TelemetryStore {
 
   listLogs(query: LogQuery): NormalizedLogRecord[] {
     const offset = query.offset ?? 0;
-    let rows = (this.db.prepare("select * from logs order by coalesce(time_unix_nano, observed_time_unix_nano, '0') desc limit ?")
-      .all(Math.max((offset + query.limit) * 4, query.limit)) as unknown as LogRow[]).map(logFromRow);
-
+    const timeExpression = "coalesce(time_unix_nano, observed_time_unix_nano, '0')";
+    const clauses: string[] = [];
+    const params: SqlParam[] = [];
     if (query.service) {
-      rows = rows.filter((log) => log.serviceName === query.service);
+      clauses.push("service_name = ?");
+      params.push(query.service);
     }
     if (query.traceId) {
-      rows = rows.filter((log) => log.traceId === query.traceId);
+      clauses.push("trace_id = ?");
+      params.push(query.traceId);
     }
     if (query.spanId) {
-      rows = rows.filter((log) => log.spanId === query.spanId);
+      clauses.push("span_id = ?");
+      params.push(query.spanId);
     }
     if (query.severity) {
-      rows = rows.filter((log) => (log.severityText ?? "").toLowerCase().includes(query.severity!.toLowerCase()));
+      clauses.push("lower(coalesce(severity_text, '')) like ? escape '\\'");
+      params.push(likePattern(query.severity.toLowerCase()));
     }
     if (query.q) {
-      const q = query.q.toLowerCase();
-      rows = rows.filter((log) => (log.bodyText ?? "").toLowerCase().includes(q) || JSON.stringify(log.attributes).toLowerCase().includes(q));
+      const q = likePattern(query.q.toLowerCase());
+      clauses.push("(lower(coalesce(body_text, '')) like ? escape '\\' or lower(attributes_json) like ? escape '\\' or trace_id like ? escape '\\')");
+      params.push(q, q, likePattern(query.q));
     }
     if (query.fromUnixNano) {
-      rows = rows.filter((log) => (log.timeUnixNano ?? log.observedTimeUnixNano ?? "0") >= query.fromUnixNano!);
+      clauses.push(`${timeExpression} >= ?`);
+      params.push(query.fromUnixNano);
     }
     if (query.toUnixNano) {
-      rows = rows.filter((log) => (log.timeUnixNano ?? log.observedTimeUnixNano ?? "0") <= query.toUnixNano!);
+      clauses.push(`${timeExpression} <= ?`);
+      params.push(query.toUnixNano);
     }
-
-    return rows.slice(offset, offset + query.limit);
+    const where = clauses.length ? ` where ${clauses.join(" and ")}` : "";
+    return (this.db.prepare(`
+      select * from logs
+      ${where}
+      order by ${timeExpression} desc
+      limit ? offset ?
+    `).all(...params, query.limit, offset) as unknown as LogRow[]).map(logFromRow);
   }
 
   listMetrics(query: MetricQuery): MetricDescriptor[] {
     const offset = query.offset ?? 0;
-    let rows = (this.db.prepare(`
+    const clauses: string[] = [];
+    const params: SqlParam[] = [];
+    if (query.service) {
+      clauses.push("service_name = ?");
+      params.push(query.service);
+    }
+    if (query.q) {
+      const q = likePattern(query.q.toLowerCase());
+      clauses.push("(lower(metric_name) like ? escape '\\' or lower(meter_name) like ? escape '\\')");
+      params.push(q, q);
+    }
+    if (query.fromUnixNano) {
+      clauses.push("time_unix_nano >= ?");
+      params.push(query.fromUnixNano);
+    }
+    if (query.toUnixNano) {
+      clauses.push("time_unix_nano <= ?");
+      params.push(query.toUnixNano);
+    }
+    const where = clauses.length ? ` where ${clauses.join(" and ")}` : "";
+    return (this.db.prepare(`
       select
         service_name as serviceName,
         meter_name as meterName,
@@ -279,52 +321,44 @@ export class SqliteTelemetryStore implements TelemetryStore {
         max(time_unix_nano) as lastSeenNano,
         count(distinct attributes_hash) as attributeSets
       from metric_points
+      ${where}
       group by service_name, meter_name, metric_name, metric_type
       order by lastSeenNano desc
-      limit ?
-    `).all(Math.max((offset + query.limit) * 4, query.limit)) as unknown as MetricDescriptorRow[]).map(metricDescriptorFromRow);
-
-    if (query.service) {
-      rows = rows.filter((metric) => metric.serviceName === query.service);
-    }
-    if (query.q) {
-      const q = query.q.toLowerCase();
-      rows = rows.filter((metric) => metric.metricName.toLowerCase().includes(q));
-    }
-    if (query.fromUnixNano) {
-      rows = rows.filter((metric) => String(Math.floor(metric.lastSeen * 1_000_000)) >= query.fromUnixNano!);
-    }
-    if (query.toUnixNano) {
-      rows = rows.filter((metric) => String(Math.floor(metric.lastSeen * 1_000_000)) <= query.toUnixNano!);
-    }
-    return rows.slice(offset, offset + query.limit);
+      limit ? offset ?
+    `).all(...params, query.limit, offset) as unknown as MetricDescriptorRow[]).map(metricDescriptorFromRow);
   }
 
   getMetricSeries(query: MetricSeriesQuery): MetricSeriesPoint[] {
     const offset = query.offset ?? 0;
-    let rows = (this.db.prepare(`
-      select * from metric_points
-      where metric_name = ?
-      order by time_unix_nano desc
-      limit ?
-    `).all(query.metricName, Math.max((offset + query.limit) * 4, query.limit)) as unknown as MetricPointRow[]).map(metricPointFromRow);
-
+    const clauses = ["metric_name = ?"];
+    const params: SqlParam[] = [query.metricName];
     if (query.service) {
-      rows = rows.filter((point) => point.serviceName === query.service);
+      clauses.push("service_name = ?");
+      params.push(query.service);
+    }
+    if (query.meterName) {
+      clauses.push("meter_name = ?");
+      params.push(query.meterName);
     }
     if (query.attrs) {
-      rows = rows.filter((point) => point.attributesHash === query.attrs);
+      clauses.push("attributes_hash = ?");
+      params.push(query.attrs);
     }
     if (query.fromUnixNano) {
-      rows = rows.filter((point) => point.timeUnixNano >= query.fromUnixNano!);
+      clauses.push("time_unix_nano >= ?");
+      params.push(query.fromUnixNano);
     }
     if (query.toUnixNano) {
-      rows = rows.filter((point) => point.timeUnixNano <= query.toUnixNano!);
+      clauses.push("time_unix_nano <= ?");
+      params.push(query.toUnixNano);
     }
-
-    return rows
+    return (this.db.prepare(`
+      select * from metric_points
+      where ${clauses.join(" and ")}
+      order by time_unix_nano desc
+      limit ? offset ?
+    `).all(...params, query.limit, offset) as unknown as MetricPointRow[]).map(metricPointFromRow)
       .sort((a, b) => a.timeUnixNano.localeCompare(b.timeUnixNano))
-      .slice(offset, offset + query.limit)
       .map((point) => ({
         timeUnixNano: point.timeUnixNano,
         value: point.value,
@@ -496,7 +530,10 @@ export class SqliteTelemetryStore implements TelemetryStore {
         batch_id text not null
       );
       create index if not exists idx_logs_service_time on logs(service_name, time_unix_nano);
+      create index if not exists idx_logs_service_event_time on logs(service_name, coalesce(time_unix_nano, observed_time_unix_nano, '0'));
+      create index if not exists idx_logs_event_time on logs(coalesce(time_unix_nano, observed_time_unix_nano, '0'));
       create index if not exists idx_logs_trace on logs(trace_id);
+      create index if not exists idx_logs_span on logs(span_id);
       create index if not exists idx_logs_severity on logs(severity_number);
 
       create table if not exists metric_points (
@@ -524,6 +561,8 @@ export class SqliteTelemetryStore implements TelemetryStore {
       );
       create index if not exists idx_metric_name_time on metric_points(metric_name, time_unix_nano);
       create index if not exists idx_metric_service_time on metric_points(service_name, time_unix_nano);
+      create index if not exists idx_metric_identity_attrs on metric_points(service_name, meter_name, metric_name, metric_type, attributes_hash);
+      create index if not exists idx_metric_identity_time on metric_points(service_name, meter_name, metric_name, metric_type, time_unix_nano);
 
       create table if not exists trace_summaries (
         trace_id text primary key,
@@ -541,7 +580,8 @@ export class SqliteTelemetryStore implements TelemetryStore {
         first_error_message text,
         updated_at integer not null
       );
-      create index if not exists idx_trace_summaries_start on trace_summaries(start_time_unix_nano);
+      create index if not exists idx_trace_summaries_start on trace_summaries(start_time_unix_nano desc);
+      create index if not exists idx_trace_summaries_end on trace_summaries(end_time_unix_nano);
       create index if not exists idx_trace_summaries_duration on trace_summaries(duration_nano);
       create index if not exists idx_trace_summaries_error on trace_summaries(error_count);
     `);
@@ -942,4 +982,16 @@ function parseJson<T>(value: string, fallback: T): T {
 function count(db: DatabaseSync, table: string) {
   const row = db.prepare(`select count(*) as value from ${table}`).get() as { value: number };
   return row.value;
+}
+
+function likePattern(value: string): string {
+  return `%${escapeLike(value)}%`;
+}
+
+function jsonArrayElementLikePattern(value: string): string {
+  return likePattern(JSON.stringify(value));
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
 }

@@ -84,6 +84,7 @@ export function registerApiRoutes(app: FastifyInstance, store: TelemetryStore) {
     const series = store.getMetricSeries({
       metricName: name,
       service: query.service || undefined,
+      meterName: query.meterName || undefined,
       attrs: query.attrs || undefined,
       fromUnixNano: parseTimeUnixNano(query.from),
       toUnixNano: parseTimeUnixNano(query.to),

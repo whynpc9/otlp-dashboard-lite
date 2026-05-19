@@ -195,10 +195,11 @@ export async function listMetrics(filters: { service?: string | undefined; q?: s
   return response.metrics;
 }
 
-export async function getMetricSeries(metricName: string, service?: string, options?: { from?: string | undefined; to?: string | undefined }): Promise<MetricSeriesPoint[]> {
+export async function getMetricSeries(metricName: string, service?: string, options?: { meterName?: string | undefined; from?: string | undefined; to?: string | undefined }): Promise<MetricSeriesPoint[]> {
   if (!metricName) return [];
   const params = new URLSearchParams();
   if (service) params.set("service", service);
+  if (options?.meterName) params.set("meterName", options.meterName);
   if (options?.from) params.set("from", options.from);
   if (options?.to) params.set("to", options.to);
   params.set("limit", "120");
