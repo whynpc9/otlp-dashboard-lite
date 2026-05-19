@@ -92,6 +92,7 @@ export interface TraceDetail extends TraceSummary {
       kind: "message" | "tool-call" | "tool-result";
       name?: string | undefined;
       contentPreview: string;
+      reasoningPreview?: string | undefined;
     }>;
     rag: {
       retrievalSpanCount: number;

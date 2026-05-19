@@ -28,6 +28,15 @@ export interface MemoryStoreLimits {
   maxMetricAttributeSets?: number;
 }
 
+type ConversationTurnDraft = {
+  spanId: string;
+  role: "system" | "user" | "assistant" | "tool";
+  kind: "message" | "tool-call" | "tool-result";
+  name?: string | undefined;
+  contentPreview: string;
+  reasoningPreview?: string | undefined;
+};
+
 export class MemoryTelemetryStore implements TelemetryStore {
   private readonly limits: MemoryStoreLimits;
   private readonly batches: RawOtlpBatch[] = [];
@@ -601,7 +610,7 @@ function normalizeRagDocument(value: unknown) {
 
 function extractConversationTurns(span: NormalizedSpan) {
   const attrs = span.attributes;
-  const turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; kind: "message" | "tool-call" | "tool-result"; name?: string | undefined; contentPreview: string }> = [];
+  const turns: ConversationTurnDraft[] = [];
   const toolName = readString(attrs, "tool.name")
     ?? readString(attrs, "mcp.tool.name")
     ?? readString(attrs, "function.name")
@@ -616,14 +625,34 @@ function extractConversationTurns(span: NormalizedSpan) {
     "input",
     "openinference.input.value"
   ]));
-  addTurn(turns, span, "assistant", "message", readFirstString(attrs, [
-    "gen_ai.completion",
-    "gen_ai.output",
-    "llm.completion",
-    "output.value",
-    "output",
-    "openinference.output.value"
-  ]));
+  const assistantReasoning = readFirstString(attrs, [
+    "gen_ai.response.reasoning_content",
+    "gen_ai.response.reasoning",
+    "gen_ai.assistant.reasoning",
+    "gen_ai.assistant.reasoning_content",
+    "gen_ai.reasoning_content",
+    "gen_ai.reasoning",
+    "llm.reasoning",
+    "llm.reasoning_content",
+    "output.reasoning",
+    "openinference.output.reasoning"
+  ]);
+  addTurn(
+    turns,
+    span,
+    "assistant",
+    "message",
+    readFirstString(attrs, [
+      "gen_ai.completion",
+      "gen_ai.output",
+      "llm.completion",
+      "output.value",
+      "output",
+      "openinference.output.value"
+    ]),
+    undefined,
+    assistantReasoning
+  );
   addTurn(turns, span, "tool", "tool-call", readFirstString(attrs, [
     "tool.input",
     "tool.args",
@@ -662,8 +691,9 @@ function extractConversationTurns(span: NormalizedSpan) {
         ?? roleFromEventName(eventName)
         ?? "assistant";
       const choiceContent = extractMessageContent(choiceMessage);
+      const choiceReasoning = extractReasoningContent(choiceMessage);
       if (choiceContent) {
-        addTurn(turns, span, choiceRole, "message", choiceContent);
+        addTurn(turns, span, choiceRole, "message", choiceContent, undefined, choiceReasoning);
       }
       addTurnsFromToolCalls(turns, span, choiceMessage["tool_calls"], toolName);
     }
@@ -672,11 +702,12 @@ function extractConversationTurns(span: NormalizedSpan) {
     const role = conversationRole(readString(eventAttrs, "role") ?? readString(eventAttrs, "message.role"))
       ?? roleFromEventName(eventName);
     const content = extractMessageContent(eventAttrs);
+    const reasoning = extractReasoningContent(eventAttrs);
     if (role && content) {
       const kind = role === "tool"
         ? (eventName?.toLowerCase().includes("result") || eventName?.toLowerCase().includes("output") ? "tool-result" : "tool-call")
         : "message";
-      addTurn(turns, span, role, kind, content, eventName);
+      addTurn(turns, span, role, kind, content, eventName, reasoning);
     }
 
     // Assistant message events can carry `tool_calls` as a structured array.
@@ -687,9 +718,9 @@ function extractConversationTurns(span: NormalizedSpan) {
 }
 
 // Handles the newer OTel GenAI structured `messages` array, where each entry has
-// `{ role, parts: [{ type: "text" | "tool_call" | "tool_call_response", ... }] }`.
+// `{ role, parts: [{ type: "text" | "tool_call" | "tool_call_response" | "reasoning" | "thinking", ... }] }`.
 function addTurnsFromMessagesArray(
-  turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; kind: "message" | "tool-call" | "tool-result"; name?: string | undefined; contentPreview: string }>,
+  turns: ConversationTurnDraft[],
   span: NormalizedSpan,
   value: unknown,
   fallbackToolName: string | undefined,
@@ -703,6 +734,7 @@ function addTurnsFromMessagesArray(
     const parts = parseMaybeJsonArray(entry.parts);
     if (parts && parts.length > 0) {
       const textChunks: string[] = [];
+      const reasoningChunks: string[] = [];
       const toolCalls: Array<{ name: string | undefined; content: string }> = [];
       const toolResults: Array<{ name: string | undefined; content: string }> = [];
       for (const part of parts) {
@@ -724,6 +756,11 @@ function addTurnsFromMessagesArray(
           if (result) {
             toolResults.push({ name, content: result });
           }
+        } else if (type === "reasoning" || type === "reasoning_content" || type === "thinking") {
+          const reasoning = flattenContentValue(part.content ?? part.text ?? part.thinking ?? part.reasoning ?? part.value);
+          if (reasoning) {
+            reasoningChunks.push(reasoning);
+          }
         } else {
           const text = flattenContentValue(part.content ?? part.text ?? part.value ?? part);
           if (text) {
@@ -731,8 +768,12 @@ function addTurnsFromMessagesArray(
           }
         }
       }
+      const reasoning = reasoningChunks.length > 0 ? reasoningChunks.join("\n\n") : undefined;
       if (textChunks.length > 0) {
-        addTurn(turns, span, role, "message", textChunks.join("\n\n"));
+        addTurn(turns, span, role, "message", textChunks.join("\n\n"), undefined, reasoning);
+      } else if (reasoning) {
+        // Reasoning-only message (assistant chain of thought without final text yet).
+        addTurn(turns, span, role, "message", "", undefined, reasoning);
       }
       for (const call of toolCalls) {
         addTurn(turns, span, "tool", "tool-call", call.content, call.name);
@@ -742,8 +783,11 @@ function addTurnsFromMessagesArray(
       }
     } else {
       const content = extractMessageContent(entry);
+      const reasoning = extractReasoningContent(entry);
       if (content) {
-        addTurn(turns, span, role, "message", content);
+        addTurn(turns, span, role, "message", content, undefined, reasoning);
+      } else if (reasoning) {
+        addTurn(turns, span, role, "message", "", undefined, reasoning);
       }
     }
     addTurnsFromToolCalls(turns, span, entry.tool_calls, fallbackToolName);
@@ -752,6 +796,28 @@ function addTurnsFromMessagesArray(
 
 function extractMessageContent(record: Record<string, unknown>): string | undefined {
   for (const key of ["content", "message.content", "body", "text", "value"]) {
+    const value = record[key];
+    const flat = flattenContentValue(value);
+    if (flat) {
+      return flat;
+    }
+  }
+  return undefined;
+}
+
+function extractReasoningContent(record: Record<string, unknown>): string | undefined {
+  for (const key of [
+    "reasoning_content",
+    "reasoning",
+    "thinking",
+    "message.reasoning_content",
+    "message.reasoning",
+    "message.thinking",
+    "gen_ai.assistant.reasoning",
+    "gen_ai.assistant.reasoning_content",
+    "gen_ai.response.reasoning_content",
+    "gen_ai.response.reasoning"
+  ]) {
     const value = record[key];
     const flat = flattenContentValue(value);
     if (flat) {
@@ -823,7 +889,7 @@ function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefin
 }
 
 function addTurnsFromToolCalls(
-  turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; kind: "message" | "tool-call" | "tool-result"; name?: string | undefined; contentPreview: string }>,
+  turns: ConversationTurnDraft[],
   span: NormalizedSpan,
   value: unknown,
   fallbackName: string | undefined
@@ -860,23 +926,30 @@ function safeStringify(value: unknown): string | undefined {
 }
 
 function addTurn(
-  turns: Array<{ spanId: string; role: "system" | "user" | "assistant" | "tool"; kind: "message" | "tool-call" | "tool-result"; name?: string | undefined; contentPreview: string }>,
+  turns: ConversationTurnDraft[],
   span: NormalizedSpan,
   role: "system" | "user" | "assistant" | "tool",
   kind: "message" | "tool-call" | "tool-result",
   value?: string,
-  name?: string
+  name?: string,
+  reasoning?: string | undefined
 ) {
-  if (!value) {
+  const hasContent = typeof value === "string" && value.length > 0;
+  const hasReasoning = typeof reasoning === "string" && reasoning.length > 0;
+  if (!hasContent && !hasReasoning) {
     return;
   }
-  turns.push({
+  const turn: ConversationTurnDraft = {
     spanId: span.spanId,
     role,
     kind,
     name,
-    contentPreview: truncate(value, 2000)
-  });
+    contentPreview: hasContent ? truncate(value!, 2000) : ""
+  };
+  if (hasReasoning) {
+    turn.reasoningPreview = truncate(reasoning!, 4000);
+  }
+  turns.push(turn);
 }
 
 function readFirstString(attrs: Record<string, unknown>, keys: string[]) {

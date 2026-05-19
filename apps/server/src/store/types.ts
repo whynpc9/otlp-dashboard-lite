@@ -162,6 +162,7 @@ export interface GenAiTraceSummary {
     kind: "message" | "tool-call" | "tool-result";
     name?: string | undefined;
     contentPreview: string;
+    reasoningPreview?: string | undefined;
   }>;
   rag: {
     retrievalSpanCount: number;

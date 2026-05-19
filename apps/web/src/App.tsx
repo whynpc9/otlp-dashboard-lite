@@ -11,7 +11,9 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDot,
+  Brain,
   ClipboardCopy,
+  Code2,
   Clock3,
   Cog,
   Database,
@@ -382,6 +384,14 @@ export function App() {
               onSelect={setSelectedTraceId}
               trace={trace}
               loading={traces.isLoading}
+              onOpenInTraces={(id) => {
+                setSelectedTraceId(id);
+                setActivePage("Traces");
+              }}
+              onOpenLogs={(traceId) => {
+                setQuery(traceId);
+                setActivePage("Logs");
+              }}
             />
           ) : (
             <SettingsPage health={health.data} />
@@ -1005,17 +1015,30 @@ function MessagesView({ turns }: { turns: ConversationTurn[] }) {
   );
 }
 
+type CopyMode = "plain" | "escaped";
+
 function MessageCard({ turn }: { turn: ConversationTurn }) {
   const [view, setView] = useState<"preview" | "raw">("preview");
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<CopyMode | null>(null);
+  const [reasoningOpen, setReasoningOpen] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const meta = messageRoleMeta(turn);
-  const isRedacted = turn.contentPreview.startsWith("[redacted");
+  const hasContent = turn.contentPreview.length > 0;
+  const isRedacted = hasContent && turn.contentPreview.startsWith("[redacted");
+  const reasoning = turn.reasoningPreview ?? "";
+  const hasReasoning = reasoning.length > 0;
 
-  const onCopy = async () => {
+  useEffect(() => () => {
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+  }, []);
+
+  const copyText = async (mode: CopyMode) => {
+    const payload = mode === "escaped" ? JSON.stringify(turn.contentPreview) : turn.contentPreview;
     try {
-      await navigator.clipboard.writeText(turn.contentPreview);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
+      await navigator.clipboard.writeText(payload);
+      setCopied(mode);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopied(null), 1200);
     } catch (error) {
       // clipboard not available; no-op
     }
@@ -1028,23 +1051,72 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
           <meta.icon size={13} />
           <strong>{meta.label}</strong>
           {turn.name ? <code>{turn.name}</code> : null}
+          {hasReasoning ? (
+            <span className="message-reasoning-tag" title="This message includes reasoning / chain-of-thought content">
+              <Brain size={11} />
+              <span>reasoning</span>
+            </span>
+          ) : null}
         </span>
         <div className="message-controls">
           <div className="segmented">
             <button type="button" className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}>Preview</button>
             <button type="button" className={view === "raw" ? "active" : ""} onClick={() => setView("raw")}>Raw</button>
           </div>
-          <button type="button" className="ghost-button" onClick={onCopy} title="Copy to clipboard">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => copyText("plain")}
+            disabled={!hasContent}
+            title={hasContent ? "Copy content text (excludes reasoning)" : "No content to copy"}
+          >
             <ClipboardCopy size={12} />
-            <span>{copied ? "Copied" : "Copy"}</span>
+            <span>{copied === "plain" ? "Copied" : "Copy"}</span>
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => copyText("escaped")}
+            disabled={!hasContent}
+            title={hasContent
+              ? 'Copy content as quoted/escaped string literal (e.g. "hello\\nworld") — paste straight into source code. Excludes reasoning.'
+              : "No content to copy"}
+          >
+            <Code2 size={12} />
+            <span>{copied === "escaped" ? "Copied" : "Copy as string"}</span>
           </button>
         </div>
       </header>
+      {hasReasoning ? (
+        <section className={reasoningOpen ? "message-reasoning open" : "message-reasoning"}>
+          <button
+            type="button"
+            className="message-reasoning-header"
+            onClick={() => setReasoningOpen((value) => !value)}
+            aria-expanded={reasoningOpen}
+          >
+            <span className="message-reasoning-title">
+              <Brain size={12} />
+              <strong>Reasoning</strong>
+              <span className="muted">· chain of thought</span>
+            </span>
+            <span className="message-reasoning-toggle">
+              {reasoningOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              <span>{reasoningOpen ? "Hide" : "Show"}</span>
+            </span>
+          </button>
+          {reasoningOpen ? <pre className="message-reasoning-body">{reasoning}</pre> : null}
+        </section>
+      ) : null}
       <div className="message-body">
-        {isRedacted ? <p className="message-redacted">{turn.contentPreview}</p> : view === "preview" ? (
-          <div className="message-preview">{renderMessagePreview(turn)}</div>
+        {hasContent ? (
+          isRedacted ? <p className="message-redacted">{turn.contentPreview}</p> : view === "preview" ? (
+            <div className="message-preview">{renderMessagePreview(turn)}</div>
+          ) : (
+            <pre className="message-raw">{turn.contentPreview}</pre>
+          )
         ) : (
-          <pre className="message-raw">{turn.contentPreview}</pre>
+          <p className="message-empty muted">No content. Expand reasoning above to view the chain of thought.</p>
         )}
       </div>
     </article>
@@ -1268,12 +1340,14 @@ function MetricChart({ series }: { series: MetricSeriesPoint[] }) {
   );
 }
 
-function GenAiPage({ traces, selectedTraceId, onSelect, trace, loading }: {
+function GenAiPage({ traces, selectedTraceId, onSelect, trace, loading, onOpenInTraces, onOpenLogs }: {
   traces: TraceSummary[];
   selectedTraceId: string;
   onSelect(id: string): void;
   trace: TraceDetail | undefined;
   loading: boolean;
+  onOpenInTraces(id: string): void;
+  onOpenLogs(traceId: string): void;
 }) {
   if (traces.length === 0) {
     return <EmptyPanel icon={loading ? RotateCw : Sparkles} title={loading ? "Loading GenAI traces…" : "No GenAI traces yet"} body={<>Emit spans with <code>gen_ai.*</code> attributes to populate this view.</>} />;
@@ -1286,70 +1360,385 @@ function GenAiPage({ traces, selectedTraceId, onSelect, trace, loading }: {
           <span className="muted">{traces.length}</span>
         </div>
         <div className="genai-list">
-          {traces.map((item) => (
-            <button
-              key={item.traceId}
-              className={item.traceId === selectedTraceId ? "genai-list-row active" : "genai-list-row"}
-              onClick={() => onSelect(item.traceId)}
-            >
-              <strong>{item.rootName}</strong>
-              <code>{shortId(item.traceId)}</code>
-              <div className="genai-list-meta">
-                <span>{(item.inputTokens ?? 0) + (item.outputTokens ?? 0)} tokens</span>
-                <span>{item.genAiSpanCount} spans</span>
-                <span>{item.serviceNames.join(", ")}</span>
-              </div>
-            </button>
-          ))}
+          {traces.map((item) => {
+            const startMs = Number(item.startTimeUnixNano) / 1_000_000;
+            return (
+              <button
+                key={item.traceId}
+                className={item.traceId === selectedTraceId ? "genai-list-row active" : "genai-list-row"}
+                onClick={() => onSelect(item.traceId)}
+              >
+                <div className="genai-list-title">
+                  <strong>{item.rootName}</strong>
+                  {item.errorCount ? <AlertTriangle size={11} className="genai-list-error" aria-label="trace has errors" /> : null}
+                  <span className="genai-list-span-count">
+                    <Sparkles size={10} className="genai-star" aria-hidden />
+                    {item.genAiSpanCount}
+                  </span>
+                </div>
+                <div className="genai-list-meta">
+                  <code className="mono">{shortId(item.traceId)}</code>
+                  <span>·</span>
+                  <span>{formatDuration(item.durationNano)}</span>
+                  <span>·</span>
+                  <span>{formatRelative(startMs)}</span>
+                </div>
+                <div className="genai-list-bottom">
+                  <span className="genai-list-tokens">
+                    <span className="muted">in</span>
+                    <strong>{(item.inputTokens ?? 0).toLocaleString()}</strong>
+                    <span className="muted">out</span>
+                    <strong>{(item.outputTokens ?? 0).toLocaleString()}</strong>
+                  </span>
+                  <span className="genai-list-services">
+                    {item.serviceNames.slice(0, 2).map((name, index) => (
+                      <span key={name} className={`service-tag service-color-${index % 6}`}>{name}</span>
+                    ))}
+                    {item.serviceNames.length > 2 ? <span className="service-tag">+{item.serviceNames.length - 2}</span> : null}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
       <div className="panel genai-detail-panel">
-        {trace?.genAi.spans.length ? <GenAiSummary trace={trace} /> : <InlineEmpty icon={Sparkles} message="Select a GenAI trace to view its agent timeline." />}
+        {trace?.genAi.spans.length ? (
+          <GenAiDetail key={trace.traceId} trace={trace} onOpenInTraces={onOpenInTraces} onOpenLogs={onOpenLogs} />
+        ) : (
+          <InlineEmpty icon={Sparkles} message="Select a GenAI trace to inspect its conversation, steps and retrieved documents." />
+        )}
       </div>
     </div>
   );
 }
 
-function GenAiSummary({ trace }: { trace: TraceDetail }) {
-  const timeline = trace.genAi.timeline.length ? trace.genAi.timeline : trace.genAi.spans.map((span) => ({
-    spanId: span.spanId,
-    kind: span.kind,
-    name: span.name,
-    label: span.model ?? span.toolName ?? span.name,
-    startTimeUnixNano: "0",
-    durationNano: span.durationNano ?? 0,
-    status: span.error ? "error" as const : "ok" as const,
-    provider: span.provider,
-    model: span.model,
-    toolName: span.toolName,
-    inputTokens: span.inputTokens,
-    outputTokens: span.outputTokens
-  }));
+type GenAiTab = "steps" | "messages" | "rag" | "tools";
+
+function GenAiDetail({ trace, onOpenInTraces, onOpenLogs }: {
+  trace: TraceDetail;
+  onOpenInTraces(id: string): void;
+  onOpenLogs(traceId: string): void;
+}) {
+  const primary = useMemo(() => derivePrimaryModel(trace), [trace]);
+  const conversation = trace.genAi.conversation;
+  const toolStats = useMemo(() => aggregateToolStats(trace), [trace]);
+  const rag = trace.genAi.rag;
+  const stepCount = trace.genAi.timeline.length || trace.genAi.spans.length;
+  const [tab, setTab] = useState<GenAiTab>(conversation.length > 0 ? "messages" : "steps");
+
   return (
-    <div className="genai-summary">
-      <div className="genai-info-bar">
-        <InfoCell label="Input tokens" value={(trace.genAi.inputTokens ?? 0).toLocaleString()} />
-        <InfoCell label="Output tokens" value={(trace.genAi.outputTokens ?? 0).toLocaleString()} />
-        <InfoCell label="Total" value={(trace.genAi.totalTokens ?? 0).toLocaleString()} />
-        <InfoCell label="Tool calls" value={trace.genAi.toolCallCount.toString()} />
-        <InfoCell label="Retrieved docs" value={trace.genAi.rag.retrievedDocCount.toString()} />
-        <InfoCell label="Cost" value={trace.genAi.estimatedCostUsd === undefined ? "n/a" : `$${trace.genAi.estimatedCostUsd.toFixed(5)}`} />
-        <InfoCell label="Longest step" value={trace.genAi.longestStep ? formatDuration(trace.genAi.longestStep.durationNano) : "n/a"} />
-      </div>
-      <div className="agent-timeline">
-        {timeline.map((span) => (
-          <div className={span.status === "error" ? "agent-step error" : "agent-step"} key={span.spanId}>
-            <MessageSquareCode size={15} />
-            <div>
-              <strong>{span.kind} · {formatDuration(span.durationNano)}</strong>
-              <span>{span.label}</span>
-              {(span.inputTokens || span.outputTokens) ? (
-                <code>{span.inputTokens ?? 0} in / {span.outputTokens ?? 0} out</code>
+    <div className="genai-detail">
+      <header className="genai-detail-header">
+        <div className="genai-detail-title">
+          <span className="genai-detail-icon">
+            <Sparkles size={14} className="genai-star" />
+          </span>
+          <div>
+            <strong>{trace.rootName}</strong>
+            <div className="genai-detail-sub">
+              {primary.model ? <code className="genai-model-badge">{primary.model}</code> : null}
+              {primary.provider ? <span className="muted">{primary.provider}</span> : null}
+              <span className="muted mono">{shortId(trace.traceId)}</span>
+              <span className="muted">·</span>
+              <span className="muted">{formatDuration(trace.durationNano)}</span>
+              {trace.errorCount ? (
+                <span className="genai-detail-error">
+                  <AlertTriangle size={11} />
+                  {trace.errorCount} error{trace.errorCount === 1 ? "" : "s"}
+                </span>
               ) : null}
             </div>
           </div>
-        ))}
+        </div>
+        <div className="genai-detail-actions">
+          <button className="ghost-button" onClick={() => onOpenLogs(trace.traceId)} title="View correlated logs">
+            <FileText size={13} />
+            <span>Logs</span>
+          </button>
+          <button className="ghost-button" onClick={() => onOpenInTraces(trace.traceId)} title="Open trace waterfall">
+            <GitBranch size={13} />
+            <span>Open in Traces</span>
+          </button>
+        </div>
+      </header>
+
+      <div className="genai-kpi-bar">
+        <KpiCell
+          label="Tokens"
+          primary={(trace.genAi.totalTokens ?? 0).toLocaleString()}
+          secondary={`${(trace.genAi.inputTokens ?? 0).toLocaleString()} in · ${(trace.genAi.outputTokens ?? 0).toLocaleString()} out`}
+        />
+        <KpiCell
+          label="Cost"
+          primary={trace.genAi.estimatedCostUsd === undefined ? "—" : `$${trace.genAi.estimatedCostUsd.toFixed(5)}`}
+          secondary={trace.genAi.estimatedCostUsd === undefined ? "no pricing" : "estimated"}
+        />
+        <KpiCell
+          label="Tool calls"
+          primary={trace.genAi.toolCallCount.toLocaleString()}
+          secondary={trace.genAi.failedToolCallCount ? `${trace.genAi.failedToolCallCount} failed` : "all ok"}
+          tone={trace.genAi.failedToolCallCount ? "warn" : undefined}
+        />
+        <KpiCell
+          label="Retrieval"
+          primary={rag.retrievedDocCount.toLocaleString()}
+          secondary={`${rag.retrievalSpanCount} retr · ${rag.embeddingSpanCount} embed${rag.rerankSpanCount ? ` · ${rag.rerankSpanCount} rerank` : ""}`}
+        />
       </div>
+
+      <div className="tab-strip genai-tab-strip">
+        <TabButton active={tab === "messages"} onClick={() => setTab("messages")} label="Messages" count={conversation.length} />
+        <TabButton active={tab === "steps"} onClick={() => setTab("steps")} label="Steps" count={stepCount} />
+        <TabButton active={tab === "rag"} onClick={() => setTab("rag")} label="RAG" count={rag.documents.length || rag.retrievedDocCount} />
+        <TabButton active={tab === "tools"} onClick={() => setTab("tools")} label="Tools" count={toolStats.length} />
+      </div>
+
+      <div className="genai-tab-content">
+        {tab === "messages" ? (
+          conversation.length === 0 ? (
+            <InlineEmpty icon={MessageSquareCode} message="No message content recorded. Set OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true to capture chat messages." />
+          ) : (
+            <MessagesView turns={conversation} />
+          )
+        ) : tab === "steps" ? (
+          <GenAiSteps trace={trace} />
+        ) : tab === "rag" ? (
+          <RagPanel rag={rag} />
+        ) : (
+          <ToolsPanel stats={toolStats} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function KpiCell({ label, primary, secondary, tone }: {
+  label: string;
+  primary: string;
+  secondary?: string | undefined;
+  tone?: "warn" | "accent" | undefined;
+}) {
+  const cls = tone === "warn" ? "kpi-cell tone-warn" : tone === "accent" ? "kpi-cell tone-accent" : "kpi-cell";
+  return (
+    <div className={cls}>
+      <span className="kpi-label">{label}</span>
+      <strong className="kpi-primary">{primary}</strong>
+      {secondary ? <span className="kpi-secondary">{secondary}</span> : null}
+    </div>
+  );
+}
+
+function derivePrimaryModel(trace: TraceDetail): { model?: string; provider?: string } {
+  const counts = new Map<string, { count: number; provider?: string | undefined }>();
+  for (const span of trace.genAi.spans) {
+    if (!span.model) continue;
+    const entry = counts.get(span.model) ?? { count: 0, provider: span.provider };
+    entry.count += 1;
+    if (!entry.provider && span.provider) entry.provider = span.provider;
+    counts.set(span.model, entry);
+  }
+  let best: { model: string; count: number; provider?: string | undefined } | undefined;
+  counts.forEach((entry, model) => {
+    if (!best || entry.count > best.count) best = { model, count: entry.count, provider: entry.provider };
+  });
+  if (!best) return {};
+  const result: { model?: string; provider?: string } = { model: best.model };
+  if (best.provider) result.provider = best.provider;
+  return result;
+}
+
+interface StepRow {
+  spanId: string;
+  kind: string;
+  label: string;
+  startMs: number;
+  durationMs: number;
+  durationNano: number;
+  status: "ok" | "error";
+  inputTokens?: number | undefined;
+  outputTokens?: number | undefined;
+  provider?: string | undefined;
+  model?: string | undefined;
+  toolName?: string | undefined;
+}
+
+function buildGenAiSteps(trace: TraceDetail): StepRow[] {
+  if (trace.genAi.timeline.length > 0) {
+    return trace.genAi.timeline
+      .map<StepRow>((t) => ({
+        spanId: t.spanId,
+        kind: t.kind,
+        label: t.label,
+        startMs: Number(t.startTimeUnixNano) / 1_000_000,
+        durationMs: t.durationNano / 1_000_000,
+        durationNano: t.durationNano,
+        status: t.status,
+        inputTokens: t.inputTokens,
+        outputTokens: t.outputTokens,
+        provider: t.provider,
+        model: t.model,
+        toolName: t.toolName
+      }))
+      .sort((a, b) => a.startMs - b.startMs);
+  }
+  return trace.genAi.spans.map<StepRow>((s) => ({
+    spanId: s.spanId,
+    kind: s.kind,
+    label: s.model ?? s.toolName ?? s.name,
+    startMs: 0,
+    durationMs: (s.durationNano ?? 0) / 1_000_000,
+    durationNano: s.durationNano ?? 0,
+    status: s.error ? "error" : "ok",
+    inputTokens: s.inputTokens,
+    outputTokens: s.outputTokens,
+    provider: s.provider,
+    model: s.model,
+    toolName: s.toolName
+  }));
+}
+
+function GenAiSteps({ trace }: { trace: TraceDetail }) {
+  const steps = useMemo(() => buildGenAiSteps(trace), [trace]);
+  if (steps.length === 0) {
+    return <InlineEmpty icon={Sparkles} message="No GenAI steps captured for this trace." />;
+  }
+  const min = steps[0]!.startMs;
+  const end = steps.reduce((m, s) => Math.max(m, s.startMs + s.durationMs), min);
+  const span = Math.max(1, end - min);
+  return (
+    <div className="genai-steps">
+      {steps.map((step, index) => {
+        const meta = stepKindMeta(step.kind);
+        const left = ((step.startMs - min) / span) * 100;
+        const width = Math.max(1.2, (step.durationMs / span) * 100);
+        return (
+          <div className={step.status === "error" ? "genai-step error" : "genai-step"} key={`${step.spanId}-${index}`}>
+            <span className="genai-step-index">{index + 1}</span>
+            <span className={`genai-step-icon kind-${meta.tone}`} aria-hidden>
+              <meta.icon size={13} />
+            </span>
+            <div className="genai-step-body">
+              <div className="genai-step-title">
+                <strong>{step.label || step.kind}</strong>
+                <code className={`genai-step-kind kind-${meta.tone}`}>{step.kind}</code>
+                {step.toolName && step.toolName !== step.label ? <span className="muted">· {step.toolName}</span> : null}
+                {step.status === "error" ? <AlertTriangle size={11} className="span-error-icon" /> : null}
+              </div>
+              <div className="genai-step-track" aria-hidden>
+                <span className={`genai-step-bar kind-${meta.tone}${step.status === "error" ? " error" : ""}`} style={{ left: `${left}%`, width: `${width}%` }} />
+              </div>
+              <div className="genai-step-meta">
+                <span><Timer size={10} /> {formatDuration(step.durationNano)}</span>
+                {(step.inputTokens || step.outputTokens) ? (
+                  <span>{(step.inputTokens ?? 0).toLocaleString()} in / {(step.outputTokens ?? 0).toLocaleString()} out</span>
+                ) : null}
+                {step.model && step.model !== step.label ? <span>{step.model}</span> : null}
+                {step.provider ? <span className="muted">{step.provider}</span> : null}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function stepKindMeta(kind: string): { icon: typeof Bot; tone: string } {
+  const k = (kind || "").toLowerCase();
+  if (k.includes("tool")) return { icon: Wrench, tone: "tool" };
+  if (k.includes("embed")) return { icon: Activity, tone: "embed" };
+  if (k.includes("rerank")) return { icon: Activity, tone: "rerank" };
+  if (k.includes("retriev") || k.includes("rag") || k.includes("search")) return { icon: Database, tone: "retrieval" };
+  if (k.includes("agent")) return { icon: Sparkles, tone: "agent" };
+  if (k.includes("chat") || k.includes("completion") || k.includes("llm") || k.includes("text_generation")) return { icon: Bot, tone: "llm" };
+  return { icon: MessageSquareCode, tone: "default" };
+}
+
+function RagPanel({ rag }: { rag: TraceDetail["genAi"]["rag"] }) {
+  if (rag.documents.length === 0 && rag.retrievalSpanCount === 0 && rag.embeddingSpanCount === 0 && rag.rerankSpanCount === 0) {
+    return <InlineEmpty icon={Database} message="No RAG retrieval recorded for this trace." />;
+  }
+  return (
+    <div className="rag-panel">
+      <div className="rag-stats">
+        <KpiCell label="Retrieved docs" primary={rag.retrievedDocCount.toLocaleString()} />
+        <KpiCell label="Retrieval spans" primary={rag.retrievalSpanCount.toLocaleString()} />
+        <KpiCell label="Embedding spans" primary={rag.embeddingSpanCount.toLocaleString()} />
+        <KpiCell label="Rerank spans" primary={rag.rerankSpanCount.toLocaleString()} />
+      </div>
+      {rag.documents.length > 0 ? (
+        <div className="rag-doc-list">
+          {rag.documents.map((doc, index) => (
+            <article className="rag-doc-card" key={`${doc.spanId}-${doc.id ?? index}`}>
+              <header className="rag-doc-header">
+                <span className="rag-doc-rank">#{index + 1}</span>
+                <strong>{doc.title ?? doc.id ?? `Document ${index + 1}`}</strong>
+                {typeof doc.score === "number" ? <span className="rag-doc-score">score {doc.score.toFixed(3)}</span> : null}
+              </header>
+              {doc.contentPreview ? <p className="rag-doc-preview">{doc.contentPreview}</p> : <p className="rag-doc-preview muted">No content preview captured.</p>}
+              <footer className="rag-doc-footer muted mono">
+                <span>{shortId(doc.spanId)}</span>
+                {doc.id ? <span>· {doc.id}</span> : null}
+              </footer>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <InlineEmpty icon={FileText} message="Retrieval ran but no document payloads were captured." />
+      )}
+    </div>
+  );
+}
+
+interface ToolStat {
+  toolName: string;
+  count: number;
+  failed: number;
+  totalDurationNano: number;
+}
+
+function aggregateToolStats(trace: TraceDetail): ToolStat[] {
+  const map = new Map<string, ToolStat>();
+  for (const span of trace.genAi.spans) {
+    if (!span.toolName) continue;
+    const entry = map.get(span.toolName) ?? { toolName: span.toolName, count: 0, failed: 0, totalDurationNano: 0 };
+    entry.count += 1;
+    if (span.error) entry.failed += 1;
+    entry.totalDurationNano += span.durationNano ?? 0;
+    map.set(span.toolName, entry);
+  }
+  return Array.from(map.values()).sort((a, b) => b.count - a.count);
+}
+
+function ToolsPanel({ stats }: { stats: ToolStat[] }) {
+  if (stats.length === 0) {
+    return <InlineEmpty icon={Wrench} message="No tool calls in this trace." />;
+  }
+  const maxCount = Math.max(1, ...stats.map((s) => s.count));
+  return (
+    <div className="tools-panel">
+      {stats.map((stat) => {
+        const portion = stat.count / maxCount;
+        const avg = stat.totalDurationNano / Math.max(1, stat.count);
+        return (
+          <div className={stat.failed > 0 ? "tool-row has-failed" : "tool-row"} key={stat.toolName}>
+            <div className="tool-row-head">
+              <Wrench size={12} />
+              <strong>{stat.toolName}</strong>
+              <span className="muted">avg {formatDuration(avg)}</span>
+            </div>
+            <div className="tool-row-bar" aria-hidden>
+              <span className="tool-row-fill" style={{ width: `${Math.max(4, portion * 100)}%` }} />
+            </div>
+            <div className="tool-row-meta">
+              <span><strong>{stat.count}</strong> call{stat.count === 1 ? "" : "s"}</span>
+              {stat.failed > 0 ? <span className="tool-row-failed"><AlertTriangle size={10} /> {stat.failed} failed</span> : <span className="muted">all ok</span>}
+              <span className="muted">total {formatDuration(stat.totalDurationNano)}</span>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
