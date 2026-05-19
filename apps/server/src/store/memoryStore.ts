@@ -242,6 +242,7 @@ export class MemoryTelemetryStore implements TelemetryStore {
     return this.metrics
       .filter((point) => point.metricName === query.metricName)
       .filter((point) => !query.service || point.serviceName === query.service)
+      .filter((point) => !query.meterName || point.meterName === query.meterName)
       .filter((point) => !query.attrs || point.attributesHash === query.attrs)
       .filter((point) => !query.fromUnixNano || point.timeUnixNano >= query.fromUnixNano)
       .filter((point) => !query.toUnixNano || point.timeUnixNano <= query.toUnixNano)

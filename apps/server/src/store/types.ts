@@ -281,6 +281,7 @@ export interface GenAiTraceListQuery {
 export interface MetricSeriesQuery {
   metricName: string;
   service?: string | undefined;
+  meterName?: string | undefined;
   attrs?: string | undefined;
   fromUnixNano?: string | undefined;
   toUnixNano?: string | undefined;

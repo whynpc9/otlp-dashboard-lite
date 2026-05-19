@@ -73,6 +73,7 @@ const REFRESH_INTERVAL_MS = 2000;
 const STALE_THRESHOLD_MS = 30_000;
 
 type TimeRangeId = "5m" | "15m" | "1h" | "6h" | "24h" | "all";
+type ThemeMode = "light" | "dark" | "system";
 const TIME_RANGE_STORAGE_KEY = "otlp-time-range";
 const TIME_RANGES: Array<{ id: TimeRangeId; label: string; durationMs: number | null }> = [
   { id: "5m", label: "Last 5 minutes", durationMs: 5 * 60_000 },
@@ -81,6 +82,17 @@ const TIME_RANGES: Array<{ id: TimeRangeId; label: string; durationMs: number | 
   { id: "6h", label: "Last 6 hours", durationMs: 6 * 60 * 60_000 },
   { id: "24h", label: "Last 24 hours", durationMs: 24 * 60 * 60_000 },
   { id: "all", label: "All time", durationMs: null }
+];
+const DEFAULT_TIME_RANGE: TimeRangeId = "all";
+const THEME_OPTIONS: Array<{ id: ThemeMode; label: string; icon: typeof Sun }> = [
+  { id: "light", label: "Light", icon: Sun },
+  { id: "system", label: "System", icon: Monitor },
+  { id: "dark", label: "Dark", icon: Moon }
+];
+const SETTINGS_ENDPOINTS = [
+  { label: "Dashboard", value: "http://localhost:18888" },
+  { label: "OTLP/HTTP", value: "http://localhost:4318" },
+  { label: "OTLP/gRPC", value: "grpc://localhost:4317" }
 ];
 
 function timeRangeMeta(id: TimeRangeId) {
@@ -95,20 +107,25 @@ function computeFromMillis(id: TimeRangeId): string | undefined {
 
 function useTimeRange(): [TimeRangeId, (id: TimeRangeId) => void] {
   const [range, setRange] = useState<TimeRangeId>(() => {
-    if (typeof window === "undefined") return "all";
-    const stored = window.localStorage.getItem(TIME_RANGE_STORAGE_KEY);
-    if (stored && TIME_RANGES.some((item) => item.id === stored)) return stored as TimeRangeId;
-    return "all";
+    if (typeof window === "undefined") return DEFAULT_TIME_RANGE;
+    try {
+      const stored = window.localStorage.getItem(TIME_RANGE_STORAGE_KEY);
+      if (stored && TIME_RANGES.some((item) => item.id === stored)) return stored as TimeRangeId;
+    } catch {
+      // Storage may be unavailable in restricted browser contexts.
+    }
+    return DEFAULT_TIME_RANGE;
   });
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    try {
       window.localStorage.setItem(TIME_RANGE_STORAGE_KEY, range);
+    } catch {
+      // Storage may be unavailable in restricted browser contexts.
     }
   }, [range]);
   return [range, setRange];
 }
 
-type ThemeMode = "light" | "dark" | "system";
 const THEME_STORAGE_KEY = "otlp-theme";
 
 function resolveTheme(mode: ThemeMode): "light" | "dark" {
@@ -122,8 +139,12 @@ function resolveTheme(mode: ThemeMode): "light" | "dark" {
 function useTheme(): [ThemeMode, (mode: ThemeMode) => void] {
   const [mode, setMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") return "system";
-    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+    try {
+      const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+      return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+    } catch {
+      return "system";
+    }
   });
 
   useEffect(() => {
@@ -134,7 +155,11 @@ function useTheme(): [ThemeMode, (mode: ThemeMode) => void] {
       document.documentElement.style.colorScheme = resolved;
     };
     apply();
-    window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+    } catch {
+      // Storage may be unavailable in restricted browser contexts.
+    }
     if (mode !== "system") return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     media.addEventListener("change", apply);
@@ -199,8 +224,8 @@ export function App() {
   const selectedMetricSeries = useQuery({
     queryKey: ["metric-series", selectedMetricKey, service, timeRange],
     queryFn: () => {
-      const [, , metricName] = selectedMetricKey.split("\u0000");
-      return getMetricSeries(metricName ?? "", service || undefined, { from: computeFromMillis(timeRange) });
+      const [, meterName, metricName] = selectedMetricKey.split("\u0000");
+      return getMetricSeries(metricName ?? "", service || undefined, { meterName, from: computeFromMillis(timeRange) });
     },
     enabled: Boolean(selectedMetricKey),
     refetchInterval: selectedMetricKey && !paused ? REFRESH_INTERVAL_MS : false
@@ -494,14 +519,9 @@ function TimeRangeMenu({ value, onChange }: { value: TimeRangeId; onChange(value
 }
 
 function ThemeSwitch({ mode, onChange }: { mode: ThemeMode; onChange(mode: ThemeMode): void }) {
-  const options: Array<{ id: ThemeMode; label: string; icon: typeof Sun }> = [
-    { id: "light", label: "Light", icon: Sun },
-    { id: "system", label: "System", icon: Monitor },
-    { id: "dark", label: "Dark", icon: Moon }
-  ];
   return (
     <div className="theme-switch" role="group" aria-label="Theme">
-      {options.map((option) => (
+      {THEME_OPTIONS.map((option) => (
         <button
           key={option.id}
           type="button"
@@ -872,7 +892,10 @@ function TraceWaterfall({ spans, selectedSpanId, onSelect, genAiSpanIds }: { spa
   const max = Math.max(...spans.map((span) => Number(span.endTimeUnixNano)));
   const total = Math.max(1, max - min);
   const depthBySpanId = useMemo(() => computeDepth(spans), [spans]);
-  const services = useMemo(() => Array.from(new Set(spans.map((span) => span.serviceName))), [spans]);
+  const serviceIndexByName = useMemo(() => {
+    const entries = Array.from(new Set(spans.map((span) => span.serviceName))).map((serviceName, index) => [serviceName, index] as const);
+    return new Map(entries);
+  }, [spans]);
 
   return (
     <div className="waterfall">
@@ -880,7 +903,7 @@ function TraceWaterfall({ spans, selectedSpanId, onSelect, genAiSpanIds }: { spa
         const left = ((Number(span.startTimeUnixNano) - min) / total) * 100;
         const width = Math.max(0.6, (span.durationNano / total) * 100);
         const depth = depthBySpanId.get(span.spanId) ?? 0;
-        const colorIndex = services.indexOf(span.serviceName);
+        const colorIndex = serviceIndexByName.get(span.serviceName) ?? 0;
         const isError = (span.statusCode ?? 0) >= 2;
         const isGenAi = genAiSpanIds.has(span.spanId);
         const active = span.spanId === selectedSpanId;
@@ -936,11 +959,13 @@ type SpanDetailTab = "messages" | "properties" | "events" | "logs";
 type ConversationTurn = TraceDetail["genAi"]["conversation"][number];
 
 function SpanDetails({ trace, selectedSpanId, genAiSpanIds }: { trace: TraceDetail; selectedSpanId: string; genAiSpanIds: Set<string> }) {
-  const span = trace.spans.find((s) => s.spanId === selectedSpanId) ?? trace.spans[0];
+  const spanById = useMemo(() => new Map(trace.spans.map((item) => [item.spanId, item])), [trace.spans]);
+  const span = spanById.get(selectedSpanId) ?? trace.spans[0];
   const spanTurns = useMemo<ConversationTurn[]>(
     () => (span ? trace.genAi.conversation.filter((turn) => turn.spanId === span.spanId) : []),
-    [span, trace.genAi.conversation]
+    [span?.spanId, trace.genAi.conversation]
   );
+  const spanLogs = useMemo(() => (span ? trace.logs.filter((log) => log.spanId === span.spanId) : []), [span?.spanId, trace.logs]);
   const isGenAi = span ? genAiSpanIds.has(span.spanId) : false;
   const [tab, setTab] = useState<SpanDetailTab>(spanTurns.length > 0 ? "messages" : "properties");
 
@@ -949,7 +974,6 @@ function SpanDetails({ trace, selectedSpanId, genAiSpanIds }: { trace: TraceDeta
   }, [selectedSpanId, spanTurns.length]);
 
   if (!span) return null;
-  const spanLogs = trace.logs.filter((log) => log.spanId === span.spanId);
   const showMessagesTab = isGenAi || spanTurns.length > 0;
 
   return (
@@ -1203,11 +1227,13 @@ function MetricsPage({ metrics, selectedMetricKey, onSelect, series, loading }: 
   loading: boolean;
 }) {
   const tree = useMemo(() => buildMetricTree(metrics), [metrics]);
+  const metricsByKey = useMemo(() => {
+    return new Map(metrics.map((metric) => [metricKey(metric), metric]));
+  }, [metrics]);
   const selected = useMemo(() => {
     if (!selectedMetricKey) return undefined;
-    const [serviceName, meterName, metricName] = selectedMetricKey.split("\u0000");
-    return metrics.find((m) => m.serviceName === serviceName && m.meterName === meterName && m.metricName === metricName);
-  }, [metrics, selectedMetricKey]);
+    return metricsByKey.get(selectedMetricKey);
+  }, [metricsByKey, selectedMetricKey]);
 
   return (
     <div className="metrics-layout">
@@ -1289,7 +1315,7 @@ function MetricTree({ tree, selectedKey, onSelect }: { tree: MetricTreeNode[]; s
                   <span>{meterGroup.meter}</span>
                 </button>
                 {meterCollapsed ? null : meterGroup.metrics.map((metric) => {
-                  const key = `${metric.serviceName}\u0000${metric.meterName}\u0000${metric.metricName}`;
+                  const key = metricKey(metric);
                   return (
                     <button
                       key={key}
@@ -1744,11 +1770,6 @@ function ToolsPanel({ stats }: { stats: ToolStat[] }) {
 }
 
 function SettingsPage({ health }: { health: Health | undefined }) {
-  const endpoints = [
-    { label: "Dashboard", value: "http://localhost:18888" },
-    { label: "OTLP/HTTP", value: "http://localhost:4318" },
-    { label: "OTLP/gRPC", value: "grpc://localhost:4317" }
-  ];
   return (
     <div className="settings-layout">
       <div className="panel">
@@ -1757,7 +1778,7 @@ function SettingsPage({ health }: { health: Health | undefined }) {
           <span className="muted">{health?.ok ? "online" : "offline"}</span>
         </div>
         <div className="settings-list">
-          {endpoints.map((item) => (
+          {SETTINGS_ENDPOINTS.map((item) => (
             <div className="settings-row" key={item.label}>
               <span>{item.label}</span>
               <code>{item.value}</code>
@@ -1792,6 +1813,10 @@ function SettingsPage({ health }: { health: Health | undefined }) {
       </div>
     </div>
   );
+}
+
+function metricKey(metric: Pick<MetricDescriptor, "serviceName" | "meterName" | "metricName">): string {
+  return `${metric.serviceName}\u0000${metric.meterName}\u0000${metric.metricName}`;
 }
 
 function EmptyPanel({ icon: Icon, title, body }: { icon: typeof Radio; title: string; body?: React.ReactNode }) {
