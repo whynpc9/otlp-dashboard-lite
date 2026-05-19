@@ -327,9 +327,17 @@ export function App() {
               </button>
             ) : null}
             <div className="page-title">
-              <pageMeta.icon size={18} />
+              <pageMeta.icon size={20} />
               <h1>{showTraceDetail ? trace?.rootName ?? "Trace detail" : pageMeta.title}</h1>
-              <span className="page-subtitle">{pageMeta.subtitle}</span>
+              {showTraceDetail ? (
+                trace ? (
+                  <span className="page-subtitle">
+                    <code>{shortId(trace.traceId)}</code>
+                  </span>
+                ) : null
+              ) : (
+                <span className="page-subtitle">{pageMeta.subtitle}</span>
+              )}
             </div>
           </div>
           <div className="page-actions">
