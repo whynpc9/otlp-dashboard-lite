@@ -615,7 +615,8 @@ function extractConversationTurns(span: NormalizedSpan) {
   const toolName = readString(attrs, "tool.name")
     ?? readString(attrs, "mcp.tool.name")
     ?? readString(attrs, "function.name")
-    ?? readString(attrs, "gen_ai.tool.name");
+    ?? readString(attrs, "gen_ai.tool.name")
+    ?? readString(attrs, "ai.toolCall.name");
 
   addTurn(turns, span, "system", "message", readFirstString(attrs, ["gen_ai.system.message", "llm.system", "system"]));
   addTurn(turns, span, "user", "message", readFirstString(attrs, [

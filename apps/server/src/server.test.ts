@@ -552,11 +552,14 @@ describe("OTLP HTTP receiver", () => {
         { key: "ai.usage.promptTokens", value: { intValue: 12 } },
         { key: "ai.usage.completionTokens", value: { intValue: 7 } },
         { key: "ai.prompt.messages", value: { stringValue: JSON.stringify(promptMessages) } },
-        { key: "ai.response.text", value: { stringValue: "AI SDK DeepSeek telemetry succeeded." } }
+        { key: "ai.response.text", value: { stringValue: "AI SDK DeepSeek telemetry succeeded." } },
+        { key: "ai.toolCall.name", value: { stringValue: "lookup_weather" } },
+        { key: "ai.toolCall.args", value: { stringValue: "{\"city\":\"Shanghai\"}" } },
+        { key: "ai.toolCall.result", value: { stringValue: "{\"forecast\":\"clear\"}" } }
       ]
     }));
 
-    const detail = await fetchJson<{ trace: { genAi: { spans: Array<{ provider?: string; model?: string; inputTokens?: number; outputTokens?: number }>; conversation: Array<{ role: string; contentPreview: string }> } } }>(
+    const detail = await fetchJson<{ trace: { genAi: { spans: Array<{ provider?: string; model?: string; inputTokens?: number; outputTokens?: number }>; conversation: Array<{ role: string; kind: string; name?: string; contentPreview: string }> } } }>(
       `${addressUrl(running.dashboard)}/api/traces/11111111111111111111111111111111`
     );
 
@@ -568,7 +571,13 @@ describe("OTLP HTTP receiver", () => {
     });
     expect(detail.trace.genAi.conversation.map((turn) => `${turn.role}:${turn.contentPreview}`)).toEqual([
       "user:Ping DeepSeek through AI SDK.",
-      "assistant:AI SDK DeepSeek telemetry succeeded."
+      "assistant:AI SDK DeepSeek telemetry succeeded.",
+      "tool:{\"city\":\"Shanghai\"}",
+      "tool:{\"forecast\":\"clear\"}"
+    ]);
+    expect(detail.trace.genAi.conversation.filter((turn) => turn.role === "tool")).toEqual([
+      expect.objectContaining({ kind: "tool-call", name: "lookup_weather" }),
+      expect.objectContaining({ kind: "tool-result", name: "lookup_weather" })
     ]);
   });
 
