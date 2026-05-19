@@ -33,6 +33,7 @@ tmp/
 # ---------------------------------------------------------------------------
 node_modules/
 dist/
+dist-packages/
 build/
 out/
 .turbo/
@@ -79,3 +80,4 @@ TestResults/
 # Project-specific
 # ---------------------------------------------------------------------------
 .agents/skills/
+packages/cli/web-dist/

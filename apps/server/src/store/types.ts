@@ -207,6 +207,7 @@ export interface TelemetryStore {
   ingest(batch: IngestBatch): IngestResult;
   listResources(): Array<{ serviceName: string; spanCount: number; logCount: number; lastSeen: number }>;
   listTraces(query: TraceListQuery): TraceSummary[];
+  listSpans(query: SpanQuery): NormalizedSpan[];
   getTrace(traceId: string): TraceDetail | undefined;
   listLogs(query: LogQuery): NormalizedLogRecord[];
   listMetrics(query: MetricQuery): MetricDescriptor[];
@@ -219,8 +220,8 @@ export interface TelemetryStore {
   stats(): {
     batches: number;
     spans: number;
-	    logs: number;
-	    traces: number;
+    logs: number;
+    traces: number;
     metrics: number;
     storage: string;
     dbPath?: string;
@@ -239,6 +240,18 @@ export interface RetentionPolicy {
 
 export interface TraceListQuery {
   service?: string | undefined;
+  q?: string | undefined;
+  hasError?: boolean | undefined;
+  minDurationMs?: number | undefined;
+  fromUnixNano?: string | undefined;
+  toUnixNano?: string | undefined;
+  offset?: number | undefined;
+  limit: number;
+}
+
+export interface SpanQuery {
+  service?: string | undefined;
+  traceId?: string | undefined;
   q?: string | undefined;
   hasError?: boolean | undefined;
   minDurationMs?: number | undefined;

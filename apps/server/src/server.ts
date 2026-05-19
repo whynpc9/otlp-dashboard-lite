@@ -9,7 +9,6 @@ import { registerApiRoutes } from "./api/routes.js";
 import { startOtlpGrpcReceiver } from "./otlp/grpcReceiver.js";
 import { registerOtlpRoutes } from "./otlp/httpReceiver.js";
 import { MemoryTelemetryStore } from "./store/memoryStore.js";
-import { SqliteTelemetryStore } from "./store/sqliteStore.js";
 import type { TelemetryStore } from "./store/types.js";
 
 export interface RunningServers {
@@ -21,7 +20,7 @@ export interface RunningServers {
 }
 
 export async function startServers(config: ServerConfig): Promise<RunningServers> {
-  const store = createStore(config);
+  const store = await createStore(config);
 
   const dashboard = Fastify({ logger: false, bodyLimit: 20 * 1024 * 1024 });
   const otlp = Fastify({ logger: false, bodyLimit: 20 * 1024 * 1024 });
@@ -87,8 +86,9 @@ export async function startServers(config: ServerConfig): Promise<RunningServers
   };
 }
 
-function createStore(config: ServerConfig): TelemetryStore {
+async function createStore(config: ServerConfig): Promise<TelemetryStore> {
   if (config.storage === "sqlite") {
+    const { SqliteTelemetryStore } = await import("./store/sqliteStore.js");
     return new SqliteTelemetryStore(path.resolve(config.dbPath), {
       maxMetricAttributeSets: config.maxMetricAttributeSets ?? 1_000
     });

@@ -15,6 +15,7 @@ import type {
   NormalizedSpan,
   RawOtlpBatch,
   RetentionPolicy,
+  SpanQuery,
   TelemetryStore,
   TraceDetail,
   TraceListQuery,
@@ -242,6 +243,47 @@ export class SqliteTelemetryStore implements TelemetryStore {
       logs,
       genAi: summarizeGenAi(spans)
     };
+  }
+
+  listSpans(query: SpanQuery): NormalizedSpan[] {
+    const offset = query.offset ?? 0;
+    const clauses: string[] = [];
+    const params: SqlParam[] = [];
+    if (query.service) {
+      clauses.push("service_name = ?");
+      params.push(query.service);
+    }
+    if (query.traceId) {
+      clauses.push("trace_id = ?");
+      params.push(query.traceId);
+    }
+    if (query.hasError !== undefined) {
+      clauses.push(query.hasError ? "coalesce(status_code, 0) >= 2" : "coalesce(status_code, 0) < 2");
+    }
+    if (query.minDurationMs !== undefined) {
+      clauses.push("duration_nano >= ?");
+      params.push(query.minDurationMs * 1_000_000);
+    }
+    if (query.fromUnixNano) {
+      clauses.push("end_time_unix_nano >= ?");
+      params.push(query.fromUnixNano);
+    }
+    if (query.toUnixNano) {
+      clauses.push("start_time_unix_nano <= ?");
+      params.push(query.toUnixNano);
+    }
+    if (query.q) {
+      const q = likePattern(query.q.toLowerCase());
+      clauses.push("(lower(name) like ? escape '\\' or trace_id like ? escape '\\' or span_id like ? escape '\\' or lower(attributes_json) like ? escape '\\')");
+      params.push(q, likePattern(query.q), likePattern(query.q), q);
+    }
+    const where = clauses.length ? ` where ${clauses.join(" and ")}` : "";
+    return (this.db.prepare(`
+      select * from spans
+      ${where}
+      order by start_time_unix_nano desc
+      limit ? offset ?
+    `).all(...params, query.limit, offset) as unknown as SpanRow[]).map(spanFromRow);
   }
 
   listLogs(query: LogQuery): NormalizedLogRecord[] {
