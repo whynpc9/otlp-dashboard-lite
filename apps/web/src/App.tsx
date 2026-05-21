@@ -78,13 +78,13 @@ const STALE_THRESHOLD_MS = 30_000;
 type TimeRangeId = "5m" | "15m" | "1h" | "6h" | "24h" | "all";
 type ThemeMode = "light" | "dark" | "system";
 const TIME_RANGE_STORAGE_KEY = "otlp-time-range";
-const TIME_RANGES: Array<{ id: TimeRangeId; label: string; durationMs: number | null }> = [
-  { id: "5m", label: "Last 5 minutes", durationMs: 5 * 60_000 },
-  { id: "15m", label: "Last 15 minutes", durationMs: 15 * 60_000 },
-  { id: "1h", label: "Last 1 hour", durationMs: 60 * 60_000 },
-  { id: "6h", label: "Last 6 hours", durationMs: 6 * 60 * 60_000 },
-  { id: "24h", label: "Last 24 hours", durationMs: 24 * 60 * 60_000 },
-  { id: "all", label: "All time", durationMs: null }
+const TIME_RANGES: Array<{ id: TimeRangeId; label: string; shortLabel: string; durationMs: number | null }> = [
+  { id: "5m", label: "Last 5 minutes", shortLabel: "5m", durationMs: 5 * 60_000 },
+  { id: "15m", label: "Last 15 minutes", shortLabel: "15m", durationMs: 15 * 60_000 },
+  { id: "1h", label: "Last 1 hour", shortLabel: "1h", durationMs: 60 * 60_000 },
+  { id: "6h", label: "Last 6 hours", shortLabel: "6h", durationMs: 6 * 60 * 60_000 },
+  { id: "24h", label: "Last 24 hours", shortLabel: "24h", durationMs: 24 * 60 * 60_000 },
+  { id: "all", label: "All time", shortLabel: "All time", durationMs: null }
 ];
 const DEFAULT_TIME_RANGE: TimeRangeId = "all";
 const THEME_OPTIONS: Array<{ id: ThemeMode; label: string; icon: typeof Sun }> = [
@@ -444,16 +444,26 @@ export function App() {
             </div>
           </div>
           <div className="page-actions">
-            <TimeRangeMenu value={timeRange} onChange={setTimeRange} />
-            <button
-              className={paused ? "icon-button active" : "icon-button"}
-              onClick={() => setPaused((value) => !value)}
-              title={paused ? "Resume refresh" : "Pause refresh"}
-            >
-              {paused ? <Play size={14} /> : <Pause size={14} />}
-              <span>{paused ? "Paused" : "Live"}</span>
-            </button>
-            <ThemeSwitch mode={themeMode} onChange={setThemeMode} />
+            <div className="page-toolbar" role="toolbar" aria-label="View controls">
+              <TimeRangeMenu value={timeRange} onChange={setTimeRange} />
+              <span className="toolbar-divider" aria-hidden="true" />
+              <button
+                type="button"
+                className={paused ? "toolbar-control toolbar-live is-paused" : "toolbar-control toolbar-live is-live"}
+                onClick={() => setPaused((value) => !value)}
+                title={paused ? "Resume refresh" : "Pause refresh"}
+                aria-pressed={!paused}
+              >
+                {paused ? (
+                  <Play size={13} aria-hidden="true" />
+                ) : (
+                  <span className="toolbar-live-dot" aria-hidden="true" />
+                )}
+                <span className="toolbar-value">{paused ? "Paused" : "Live"}</span>
+              </button>
+              <span className="toolbar-divider" aria-hidden="true" />
+              <ThemeSwitch mode={themeMode} onChange={setThemeMode} />
+            </div>
           </div>
         </header>
 
@@ -641,33 +651,41 @@ function TimeRangeMenu({ value, onChange }: { value: TimeRangeId; onChange(value
     <div className="time-range" ref={containerRef}>
       <button
         type="button"
-        className={open ? "icon-button time-range-trigger open" : "icon-button time-range-trigger"}
-        onClick={() => setOpen((value) => !value)}
+        className={open ? "toolbar-control time-range-trigger open" : "toolbar-control time-range-trigger"}
+        onClick={() => setOpen((current) => !current)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title="Time range"
+        aria-label={`Time window: ${meta.label}`}
+        title={meta.label}
       >
-        <Timer size={14} />
-        <span>{meta.label}</span>
-        <ChevronDown size={12} />
+        <span className="toolbar-prefix">Window</span>
+        <Timer size={13} aria-hidden="true" />
+        <span className="toolbar-value">{meta.shortLabel}</span>
+        <ChevronDown size={12} className="toolbar-chevron" aria-hidden="true" />
       </button>
       {open ? (
-        <div className="time-range-menu" role="listbox">
-          {TIME_RANGES.map((item) => (
-            <button
-              key={item.id}
-              role="option"
-              aria-selected={item.id === value}
-              className={item.id === value ? "time-range-option active" : "time-range-option"}
-              onClick={() => {
-                onChange(item.id);
-                setOpen(false);
-              }}
-            >
-              <span>{item.label}</span>
-              {item.id === value ? <Check size={13} /> : null}
-            </button>
-          ))}
+        <div className="time-range-menu" role="listbox" aria-label="Time window">
+          <div className="time-range-menu-head">
+            <span>Time window</span>
+          </div>
+          <div className="time-range-menu-body">
+            {TIME_RANGES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="option"
+                aria-selected={item.id === value}
+                className={item.id === value ? "time-range-option active" : "time-range-option"}
+                onClick={() => {
+                  onChange(item.id);
+                  setOpen(false);
+                }}
+              >
+                <span>{item.label}</span>
+                {item.id === value ? <Check size={13} className="toolbar-check" /> : null}
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
     </div>
