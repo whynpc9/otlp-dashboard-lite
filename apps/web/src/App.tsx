@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Activity,
   AlertCircle,
@@ -421,7 +423,7 @@ export function App() {
       </aside>
 
       <main className="workspace">
-        <header className="page-header">
+        <header className={!showTraceDetail && activePage !== "Settings" && activePage !== "Resources" ? "page-header page-header-has-filters" : "page-header"}>
           <div className="page-title-group">
             {showTraceDetail ? (
               <button className="back-button" onClick={() => setSelectedTraceId("")} title="Back to traces">
@@ -443,6 +445,23 @@ export function App() {
               )}
             </div>
           </div>
+          {!showTraceDetail && activePage !== "Settings" && activePage !== "Resources" ? (
+            <div className="page-header-filters">
+              <FilterBar
+                page={activePage}
+                query={query}
+                onQueryChange={setQuery}
+                service={service}
+                onServiceChange={setService}
+                services={serviceNames}
+                serviceAvatarMap={serviceAvatarMap}
+                errorsOnly={errorsOnly}
+                onErrorsOnlyChange={setErrorsOnly}
+                severity={severity}
+                onSeverityChange={setSeverity}
+              />
+            </div>
+          ) : null}
           <div className="page-actions">
             <div className="page-toolbar" role="toolbar" aria-label="View controls">
               <TimeRangeMenu value={timeRange} onChange={setTimeRange} />
@@ -464,28 +483,20 @@ export function App() {
               <span className="toolbar-divider" aria-hidden="true" />
               <ThemeSwitch mode={themeMode} onChange={setThemeMode} />
             </div>
+            {!showTraceDetail ? (
+              <button
+                type="button"
+                className="outline-button outline-button-danger page-clear-button"
+                onClick={() => setClearConfirmOpen(true)}
+                disabled={clearData.isPending}
+                title="Clear all telemetry"
+              >
+                <Eraser size={13} />
+                <span>{clearData.isPending ? "Clearing…" : "Clear data"}</span>
+              </button>
+            ) : null}
           </div>
         </header>
-
-        {!showTraceDetail && (
-          <div className="filter-bar">
-            <FilterBar
-              page={activePage}
-              query={query}
-              onQueryChange={setQuery}
-              service={service}
-              onServiceChange={setService}
-              services={serviceNames}
-              serviceAvatarMap={serviceAvatarMap}
-              errorsOnly={errorsOnly}
-              onErrorsOnlyChange={setErrorsOnly}
-              severity={severity}
-              onSeverityChange={setSeverity}
-              onClear={() => setClearConfirmOpen(true)}
-              clearing={clearData.isPending}
-            />
-          </div>
-        )}
 
         <section className="page-content">
           {activePage === "Resources" ? (
@@ -732,9 +743,7 @@ function FilterBar({
   errorsOnly,
   onErrorsOnlyChange,
   severity,
-  onSeverityChange,
-  onClear,
-  clearing
+  onSeverityChange
 }: {
   page: PageKey;
   query: string;
@@ -747,65 +756,48 @@ function FilterBar({
   onErrorsOnlyChange(value: boolean): void;
   severity: string;
   onSeverityChange(value: string): void;
-  onClear(): void;
-  clearing: boolean;
 }) {
-  const showFilters = page !== "Settings" && page !== "Resources";
   return (
     <div className="filter-bar-inner">
-      {showFilters ? (
-        <>
-          <label className="filter-control filter-search">
-            <Search size={14} aria-hidden="true" />
-            <input
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
-              placeholder={searchPlaceholder(page)}
-              aria-label={searchPlaceholder(page)}
-            />
-          </label>
-          <ResourceFilterMenu
-            value={service}
-            services={services}
-            avatarMap={serviceAvatarMap}
-            onChange={onServiceChange}
-          />
-          {page === "Logs" ? (
-            <label className="filter-control filter-select">
-              <span className="filter-select-prefix">Level</span>
-              <AlertCircle size={14} aria-hidden="true" />
-              <select
-                value={severity}
-                onChange={(event) => onSeverityChange(event.target.value)}
-                aria-label="Log severity"
-              >
-                <option value="">All levels</option>
-                <option value="error">Error</option>
-                <option value="warn">Warn</option>
-                <option value="info">Info</option>
-                <option value="debug">Debug</option>
-              </select>
-              <ChevronDown size={12} className="filter-select-chevron" aria-hidden="true" />
-            </label>
-          ) : null}
-          {page === "Traces" || page === "GenAI" ? (
-            <button className={errorsOnly ? "chip-toggle active" : "chip-toggle"} onClick={() => onErrorsOnlyChange(!errorsOnly)}>
-              <AlertTriangle size={13} />
-              Errors only
-            </button>
-          ) : null}
-        </>
-      ) : (
-        <div className="filter-placeholder">
-          {page === "Resources" ? "All telemetry-reporting resources" : "Local OTel workbench settings"}
-        </div>
-      )}
-      <div className="filter-actions">
-        <button className="ghost-button danger" onClick={onClear} disabled={clearing} title="Clear all telemetry">
-          <Eraser size={13} />
-          <span>{clearing ? "Clearing…" : "Clear data"}</span>
+      <label className="filter-control filter-search">
+        <Search size={14} aria-hidden="true" />
+        <input
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder={searchPlaceholder(page)}
+          aria-label={searchPlaceholder(page)}
+        />
+      </label>
+      <ResourceFilterMenu
+        value={service}
+        services={services}
+        avatarMap={serviceAvatarMap}
+        onChange={onServiceChange}
+      />
+      {page === "Logs" ? (
+        <label className="filter-control filter-select">
+          <span className="filter-select-prefix">Level</span>
+          <AlertCircle size={14} aria-hidden="true" />
+          <select
+            value={severity}
+            onChange={(event) => onSeverityChange(event.target.value)}
+            aria-label="Log severity"
+          >
+            <option value="">All levels</option>
+            <option value="error">Error</option>
+            <option value="warn">Warn</option>
+            <option value="info">Info</option>
+            <option value="debug">Debug</option>
+          </select>
+          <ChevronDown size={12} className="filter-select-chevron" aria-hidden="true" />
+        </label>
+      ) : null}
+      {page === "Traces" || page === "GenAI" ? (
+        <button className={errorsOnly ? "chip-toggle active" : "chip-toggle"} onClick={() => onErrorsOnlyChange(!errorsOnly)}>
+          <AlertTriangle size={13} />
+          Errors only
         </button>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -1523,7 +1515,7 @@ function SpanDetails({ trace, selectedSpanId, genAiSpanIds }: { trace: TraceDeta
           spanTurns.length === 0 ? (
             <InlineEmpty icon={Sparkles} message="No message content recorded. Set OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true to capture chat messages." />
           ) : (
-            <MessagesView turns={spanTurns} />
+            <MessagesView turns={spanTurns} trace={trace} />
           )
         ) : tab === "properties" ? (
           <PropertiesTable record={span.attributes} />
@@ -1555,14 +1547,118 @@ function SpanDetails({ trace, selectedSpanId, genAiSpanIds }: { trace: TraceDeta
   );
 }
 
-function MessagesView({ turns }: { turns: ConversationTurn[] }) {
+function MessagesView({ turns, trace }: { turns: ConversationTurn[]; trace?: TraceDetail }) {
+  const groups = useMemo(() => {
+    if (!trace) {
+      return [{ label: undefined, rounds: [{ label: undefined, spanId: undefined, turns }] }];
+    }
+    return groupConversationTurns(trace, turns);
+  }, [trace, turns]);
+
   return (
     <div className="message-list">
-      {turns.map((turn, index) => (
-        <MessageCard key={`${turn.spanId}-${index}-${turn.kind}-${turn.role}`} turn={turn} />
+      {groups.map((group, groupIndex) => (
+        <section className="message-group" key={`${group.label ?? "group"}-${groupIndex}`}>
+          {group.label ? (
+            <header className="message-group-header">
+              <Sparkles size={12} />
+              <strong>{group.label}</strong>
+              <span className="muted">{group.rounds.length} inference round{group.rounds.length === 1 ? "" : "s"}</span>
+            </header>
+          ) : null}
+          {group.rounds.map((round, roundIndex) => (
+            <div className="message-round" key={`${round.spanId ?? "round"}-${roundIndex}`}>
+              {round.label ? (
+                <div className="message-round-label">
+                  <span>{round.label}</span>
+                  {round.spanId ? <code>{shortId(round.spanId)}</code> : null}
+                </div>
+              ) : null}
+              <div className="message-round-body">
+                {round.turns.map((turn, index) => (
+                  <MessageCard
+                    key={`${turn.spanId}-${index}-${turn.kind}-${turn.role}`}
+                    turn={turn}
+                    nested={turn.kind !== "message"}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
       ))}
     </div>
   );
+}
+
+type MessageRoundGroup = {
+  label?: string | undefined;
+  spanId?: string | undefined;
+  turns: ConversationTurn[];
+};
+
+type MessageStepGroup = {
+  label?: string | undefined;
+  rounds: MessageRoundGroup[];
+};
+
+function groupConversationTurns(trace: TraceDetail, turns: ConversationTurn[]): MessageStepGroup[] {
+  const spanById = new Map(trace.spans.map((span) => [span.spanId, span]));
+  const groups: MessageStepGroup[] = [];
+  const groupByLabel = new Map<string, MessageStepGroup>();
+  const roundByKey = new Map<string, MessageRoundGroup>();
+
+  for (const turn of turns) {
+    const stepLabel = resolveAgentStepLabel(turn.spanId, spanById);
+    const groupKey = stepLabel ?? "__default__";
+    let group = groupByLabel.get(groupKey);
+    if (!group) {
+      group = { label: stepLabel, rounds: [] };
+      groupByLabel.set(groupKey, group);
+      groups.push(group);
+    }
+
+    const roundKey = `${groupKey}::${turn.spanId}`;
+    let round = roundByKey.get(roundKey);
+    if (!round) {
+      const span = spanById.get(turn.spanId);
+      round = {
+        label: formatInferenceRoundLabel(span),
+        spanId: turn.spanId,
+        turns: []
+      };
+      roundByKey.set(roundKey, round);
+      group.rounds.push(round);
+    }
+    round.turns.push(turn);
+  }
+
+  return groups;
+}
+
+function resolveAgentStepLabel(spanId: string, spanById: Map<string, TraceDetail["spans"][number]>): string | undefined {
+  let current = spanById.get(spanId);
+  while (current) {
+    if (current.name.startsWith("agent.step.")) {
+      const step = current.name.slice("agent.step.".length).replace(/_/g, " ");
+      return step.charAt(0).toUpperCase() + step.slice(1);
+    }
+    current = current.parentSpanId ? spanById.get(current.parentSpanId) : undefined;
+  }
+  return undefined;
+}
+
+function formatInferenceRoundLabel(span: TraceDetail["spans"][number] | undefined): string | undefined {
+  if (!span) {
+    return undefined;
+  }
+  if (span.name === "ai.generateText.doGenerate") {
+    return "Model inference";
+  }
+  if (span.name.startsWith("tool.")) {
+    return span.name.slice("tool.".length);
+  }
+  return span.name;
 }
 
 type CopyMode = "plain" | "escaped";
@@ -1579,27 +1675,16 @@ function tryParseJsonContent(text: string): unknown | null {
   }
 }
 
-function defaultJsonPretty(turn: ConversationTurn): boolean {
-  return turn.kind === "tool-call" || turn.kind === "tool-result";
-}
-
-function MessageCard({ turn }: { turn: ConversationTurn }) {
+function MessageCard({ turn, nested = false }: { turn: ConversationTurn; nested?: boolean }) {
   const [view, setView] = useState<"preview" | "raw">("preview");
   const [copied, setCopied] = useState<CopyMode | null>(null);
   const [reasoningOpen, setReasoningOpen] = useState(false);
-  const [jsonPretty, setJsonPretty] = useState(() => defaultJsonPretty(turn));
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const meta = messageRoleMeta(turn);
   const hasContent = turn.contentPreview.length > 0;
   const isRedacted = hasContent && turn.contentPreview.startsWith("[redacted");
   const reasoning = turn.reasoningPreview ?? "";
   const hasReasoning = reasoning.length > 0;
-  const parsedJson = useMemo(() => tryParseJsonContent(turn.contentPreview), [turn.contentPreview]);
-  const canPrettifyJson = parsedJson !== null;
-
-  useEffect(() => {
-    setJsonPretty(defaultJsonPretty(turn));
-  }, [turn.contentPreview, turn.kind]);
 
   useEffect(() => () => {
     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
@@ -1618,7 +1703,7 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
   };
 
   return (
-    <article className={`message-card message-${meta.tone}`}>
+    <article className={`message-card message-${meta.tone}${nested ? " message-card-nested" : ""}`}>
       <header className="message-header">
         <span className={`message-role-badge tone-${meta.tone}`}>
           <meta.icon size={13} />
@@ -1636,17 +1721,6 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
             <button type="button" className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}>Preview</button>
             <button type="button" className={view === "raw" ? "active" : ""} onClick={() => setView("raw")}>Raw</button>
           </div>
-          {view === "preview" && canPrettifyJson ? (
-            <button
-              type="button"
-              className={`message-action-button${jsonPretty ? " active" : ""}`}
-              onClick={() => setJsonPretty((value) => !value)}
-              title={jsonPretty ? "Show compact JSON" : "Pretty-print JSON for easier reading"}
-            >
-              <Braces size={12} />
-              <span>Prettier</span>
-            </button>
-          ) : null}
           <span className="message-controls-divider" aria-hidden="true" />
           <button
             type="button"
@@ -1700,7 +1774,7 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
       <div className="message-body">
         {hasContent ? (
           isRedacted ? <p className="message-redacted">{turn.contentPreview}</p> : view === "preview" ? (
-            <div className="message-preview">{renderMessagePreview(turn, jsonPretty)}</div>
+            <div className="message-preview">{renderMessagePreview(turn)}</div>
           ) : (
             <pre className="message-raw">{turn.contentPreview}</pre>
           )
@@ -1712,19 +1786,21 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
   );
 }
 
-function renderMessagePreview(turn: ConversationTurn, jsonPretty: boolean): React.ReactNode {
+function renderMessagePreview(turn: ConversationTurn): React.ReactNode {
   const text = turn.contentPreview;
   const parsed = tryParseJsonContent(text);
   if (parsed !== null) {
     return (
       <pre className="message-json">
-        {jsonPretty ? JSON.stringify(parsed, null, 2) : text.trim()}
+        {JSON.stringify(parsed, null, 2)}
       </pre>
     );
   }
-  return text.split(/\n+/).map((paragraph, index) => (
-    <p key={index}>{paragraph}</p>
-  ));
+  return (
+    <div className="message-markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  );
 }
 
 function messageRoleMeta(turn: ConversationTurn): { label: string; icon: typeof Bot; tone: "system" | "user" | "assistant" | "tool-call" | "tool-result" } {
@@ -2028,67 +2104,68 @@ function GenAiDetail({ trace, onOpenInTraces, onOpenLogs }: {
   return (
     <div className="genai-detail">
       <header className="genai-detail-header">
-        <div className="genai-detail-title">
-          <span className="genai-detail-icon">
-            <Sparkles size={14} className="genai-star" />
-          </span>
-          <div>
-            <strong>{trace.rootName}</strong>
-            <div className="genai-detail-sub">
-              {primary.model ? <code className="genai-model-badge">{primary.model}</code> : null}
-              {primary.provider ? <span className="muted">{primary.provider}</span> : null}
-              <CopyableCode
-                value={trace.traceId}
-                display={shortId(trace.traceId)}
-                copyLabel="Copy trace ID"
-                className="genai-detail-trace-id"
-              />
-              <span className="muted">·</span>
-              <span className="muted">{formatDuration(trace.durationNano)}</span>
-              {trace.errorCount ? (
-                <span className="genai-detail-error">
-                  <AlertTriangle size={11} />
-                  {trace.errorCount} error{trace.errorCount === 1 ? "" : "s"}
-                </span>
-              ) : null}
+        <div className="genai-detail-main">
+          <div className="genai-detail-title">
+            <span className="genai-detail-icon">
+              <Sparkles size={14} className="genai-star" />
+            </span>
+            <div>
+              <strong>{trace.rootName}</strong>
+              <div className="genai-detail-sub">
+                {primary.model ? <code className="genai-model-badge">{primary.model}</code> : null}
+                {primary.provider ? <span className="muted">{primary.provider}</span> : null}
+                <CopyableCode
+                  value={trace.traceId}
+                  display={shortId(trace.traceId)}
+                  copyLabel="Copy trace ID"
+                  className="genai-detail-trace-id"
+                />
+                <span className="muted">·</span>
+                <span className="muted">{formatDuration(trace.durationNano)}</span>
+                {trace.errorCount ? (
+                  <span className="genai-detail-error">
+                    <AlertTriangle size={11} />
+                    {trace.errorCount} error{trace.errorCount === 1 ? "" : "s"}
+                  </span>
+                ) : null}
+              </div>
             </div>
+          </div>
+          <div className="genai-mini-stats" aria-label="Trace statistics">
+            <GenAiMiniStat
+              label="Tokens"
+              value={(trace.genAi.totalTokens ?? 0).toLocaleString()}
+              title={`${(trace.genAi.inputTokens ?? 0).toLocaleString()} in · ${(trace.genAi.outputTokens ?? 0).toLocaleString()} out`}
+            />
+            <GenAiMiniStat
+              label="Cost"
+              value={trace.genAi.estimatedCostUsd === undefined ? "—" : `$${trace.genAi.estimatedCostUsd.toFixed(5)}`}
+              title={trace.genAi.estimatedCostUsd === undefined ? "No pricing configured" : "Estimated cost"}
+            />
+            <GenAiMiniStat
+              label="Tools"
+              value={trace.genAi.toolCallCount.toLocaleString()}
+              title={trace.genAi.failedToolCallCount ? `${trace.genAi.failedToolCallCount} failed` : "All tool calls succeeded"}
+              tone={trace.genAi.failedToolCallCount ? "warn" : undefined}
+            />
+            <GenAiMiniStat
+              label="Retrieval"
+              value={rag.retrievedDocCount.toLocaleString()}
+              title={`${rag.retrievalSpanCount} retr · ${rag.embeddingSpanCount} embed${rag.rerankSpanCount ? ` · ${rag.rerankSpanCount} rerank` : ""}`}
+            />
           </div>
         </div>
         <div className="genai-detail-actions">
-          <button className="ghost-button" onClick={() => onOpenLogs(trace.traceId)} title="View correlated logs">
-            <FileText size={13} />
+          <button type="button" className="outline-button" onClick={() => onOpenLogs(trace.traceId)} title="View correlated logs">
+            <FileText size={12} />
             <span>Logs</span>
           </button>
-          <button className="ghost-button" onClick={() => onOpenInTraces(trace.traceId)} title="Open trace waterfall">
-            <GitBranch size={13} />
+          <button type="button" className="outline-button" onClick={() => onOpenInTraces(trace.traceId)} title="Open trace waterfall">
+            <GitBranch size={12} />
             <span>Open in Traces</span>
           </button>
         </div>
       </header>
-
-      <div className="genai-kpi-bar">
-        <KpiCell
-          label="Tokens"
-          primary={(trace.genAi.totalTokens ?? 0).toLocaleString()}
-          secondary={`${(trace.genAi.inputTokens ?? 0).toLocaleString()} in · ${(trace.genAi.outputTokens ?? 0).toLocaleString()} out`}
-        />
-        <KpiCell
-          label="Cost"
-          primary={trace.genAi.estimatedCostUsd === undefined ? "—" : `$${trace.genAi.estimatedCostUsd.toFixed(5)}`}
-          secondary={trace.genAi.estimatedCostUsd === undefined ? "no pricing" : "estimated"}
-        />
-        <KpiCell
-          label="Tool calls"
-          primary={trace.genAi.toolCallCount.toLocaleString()}
-          secondary={trace.genAi.failedToolCallCount ? `${trace.genAi.failedToolCallCount} failed` : "all ok"}
-          tone={trace.genAi.failedToolCallCount ? "warn" : undefined}
-        />
-        <KpiCell
-          label="Retrieval"
-          primary={rag.retrievedDocCount.toLocaleString()}
-          secondary={`${rag.retrievalSpanCount} retr · ${rag.embeddingSpanCount} embed${rag.rerankSpanCount ? ` · ${rag.rerankSpanCount} rerank` : ""}`}
-        />
-      </div>
 
       <div className="tab-strip genai-tab-strip">
         <TabButton active={tab === "messages"} onClick={() => setTab("messages")} label="Messages" count={conversation.length} />
@@ -2102,7 +2179,7 @@ function GenAiDetail({ trace, onOpenInTraces, onOpenLogs }: {
           conversation.length === 0 ? (
             <InlineEmpty icon={MessageSquareCode} message="No message content recorded. Set OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true to capture chat messages." />
           ) : (
-            <MessagesView turns={conversation} />
+            <MessagesView turns={conversation} trace={trace} />
           )
         ) : tab === "steps" ? (
           <GenAiSteps trace={trace} />
@@ -2113,6 +2190,21 @@ function GenAiDetail({ trace, onOpenInTraces, onOpenLogs }: {
         )}
       </div>
     </div>
+  );
+}
+
+function GenAiMiniStat({ label, value, title, tone }: {
+  label: string;
+  value: string;
+  title?: string;
+  tone?: "warn" | undefined;
+}) {
+  const cls = tone === "warn" ? "genai-mini-stat tone-warn" : "genai-mini-stat";
+  return (
+    <span className={cls} title={title}>
+      <span className="genai-mini-stat-label">{label}</span>
+      <strong className="genai-mini-stat-value">{value}</strong>
+    </span>
   );
 }
 

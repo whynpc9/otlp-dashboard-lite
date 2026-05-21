@@ -20,6 +20,30 @@ pnpm start
 
 The script loads `DEEPSEEK_API_KEY` from the nearest parent `.env` file when it is not already exported.
 
+For a richer end-to-end GenAI/Agent validation trace with multi-step tool calling:
+
+```bash
+cd examples/ts-agent
+pnpm install
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+pnpm complex
+```
+
+The complex probe creates service `ts-ai-sdk-deepseek-complex` and runs two DeepSeek AI SDK `generateText` rounds inside one agent session. It enables AI SDK telemetry and also emits explicit OpenTelemetry spans for tool calls and RAG retrieval so the dashboard can validate:
+
+- Trace waterfall: parent `agent.session.deepseek_complex_e2e`, child `agent.step.triage` / `agent.step.validation`, AI SDK model spans, tool spans, and retrieval spans.
+- GenAI view: DeepSeek provider/model metadata, token usage, prompts/responses, and tool call/result turns.
+- Agent/RAG view: `searchIncidents`, `getServiceMetrics`, `inspectTraceSample`, `createRemediationPlan`, retrieved documents, and a two-round agent timeline.
+
+Optional environment variables:
+
+```bash
+export DEEPSEEK_MODEL=deepseek-chat
+export DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+export OTEL_SERVICE_NAME=ts-ai-sdk-deepseek-complex
+```
+
 Expected result:
 
 - Service name: `ts-ai-sdk-deepseek`

@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx agent-smoke.ts"
+    "start": "tsx agent-smoke.ts",
+    "complex": "tsx deepseek-complex-agent.ts"
   },
   "dependencies": {
     "@ai-sdk/deepseek": "^2.0.35",
@@ -14,7 +15,8 @@
     "@opentelemetry/sdk-trace-node": "^2.2.0",
     "@opentelemetry/semantic-conventions": "^1.38.0",
     "ai": "^6.0.96",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "tsx": "^4.22.0"

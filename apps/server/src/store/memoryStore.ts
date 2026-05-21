@@ -493,10 +493,7 @@ export function summarizeGenAi(spans: NormalizedSpan[]): GenAiTraceSummary {
         inputTokens: span.inputTokens,
         outputTokens: span.outputTokens
       })),
-    conversation: genAiSpans
-      .sort((a, b) => Number(a.startTimeUnixNano) - Number(b.startTimeUnixNano))
-      .flatMap((span) => span.conversationTurns)
-      .slice(0, 80),
+    conversation: buildTraceConversation(spans, genAiSpans).slice(0, 80),
     rag: {
       retrievalSpanCount: genAiSpans.filter((span) => span.kind === "retrieval").length,
       retrievedDocCount: genAiSpans.reduce((sum, span) => sum + (span.retrievedDocCount ?? span.retrievedDocuments.length), 0),
@@ -648,14 +645,228 @@ function normalizeRagDocument(value: unknown) {
   };
 }
 
-function extractConversationTurns(span: NormalizedSpan) {
-  const attrs = span.attributes;
-  const turns: ConversationTurnDraft[] = [];
-  const toolName = readString(attrs, "tool.name")
+function readToolNameFromAttrs(attrs: Record<string, unknown>): string | undefined {
+  return readString(attrs, "tool.name")
     ?? readString(attrs, "mcp.tool.name")
     ?? readString(attrs, "function.name")
     ?? readString(attrs, "gen_ai.tool.name")
     ?? readString(attrs, "ai.toolCall.name");
+}
+
+function readAssistantReasoning(attrs: Record<string, unknown>): string | undefined {
+  return readFirstString(attrs, [
+    "gen_ai.response.reasoning_content",
+    "gen_ai.response.reasoning",
+    "gen_ai.assistant.reasoning",
+    "gen_ai.assistant.reasoning_content",
+    "gen_ai.reasoning_content",
+    "gen_ai.reasoning",
+    "llm.reasoning",
+    "llm.reasoning_content",
+    "output.reasoning",
+    "openinference.output.reasoning"
+  ]);
+}
+
+function turnFingerprint(turn: ConversationTurnDraft): string {
+  return `${turn.role}|${turn.kind}|${turn.name ?? ""}|${turn.contentPreview}|${turn.reasoningPreview ?? ""}`;
+}
+
+function addTurnDeduped(
+  seen: Set<string>,
+  turns: ConversationTurnDraft[],
+  span: NormalizedSpan,
+  role: "system" | "user" | "assistant" | "tool",
+  kind: "message" | "tool-call" | "tool-result",
+  value?: string,
+  name?: string,
+  reasoning?: string | undefined
+) {
+  const draft: ConversationTurnDraft = {
+    spanId: span.spanId,
+    role,
+    kind,
+    name,
+    contentPreview: typeof value === "string" && value.length > 0 ? truncate(value, 2000) : ""
+  };
+  if (typeof reasoning === "string" && reasoning.length > 0) {
+    draft.reasoningPreview = truncate(reasoning, 4000);
+  }
+  if (!draft.contentPreview && !draft.reasoningPreview) {
+    return;
+  }
+  const fingerprint = turnFingerprint(draft);
+  if (seen.has(fingerprint)) {
+    return;
+  }
+  seen.add(fingerprint);
+  turns.push(draft);
+}
+
+function findAgentStepSpanId(span: NormalizedSpan, spanById: Map<string, NormalizedSpan>): string | undefined {
+  let current: NormalizedSpan | undefined = span;
+  while (current) {
+    if (current.name.startsWith("agent.step.")) {
+      return current.spanId;
+    }
+    current = current.parentSpanId ? spanById.get(current.parentSpanId) : undefined;
+  }
+  return undefined;
+}
+
+function extractInferenceSpanTurns(span: NormalizedSpan): ConversationTurnDraft[] {
+  const attrs = span.attributes;
+  const turns: ConversationTurnDraft[] = [];
+  const toolName = readToolNameFromAttrs(attrs);
+
+  addTurnsFromMessagesArray(turns, span, attrs["ai.prompt.messages"], toolName, "user");
+  addTurn(
+    turns,
+    span,
+    "assistant",
+    "message",
+    readFirstString(attrs, ["ai.response.text", "gen_ai.completion", "gen_ai.output"]),
+    undefined,
+    readAssistantReasoning(attrs)
+  );
+  addTurnsFromToolCalls(turns, span, attrs["ai.response.toolCalls"], toolName);
+  addTurn(turns, span, "tool", "tool-call", readFirstString(attrs, [
+    "ai.toolCall.args",
+    "tool.input",
+    "tool.args",
+    "tool.arguments"
+  ]), toolName);
+  addTurn(turns, span, "tool", "tool-result", readFirstString(attrs, [
+    "ai.toolCall.result",
+    "tool.output",
+    "tool.result"
+  ]), toolName);
+  addTurnsFromMessagesArray(turns, span, attrs["gen_ai.input.messages"], toolName, "user");
+  addTurnsFromMessagesArray(turns, span, attrs["gen_ai.output.messages"], toolName, "assistant");
+
+  for (const event of span.events) {
+    const eventRecord = isRecord(event) ? event : {};
+    const eventAttrs = isRecord(eventRecord.attributes) ? eventRecord.attributes as Record<string, unknown> : eventRecord;
+    addTurnsFromMessagesArray(turns, span, eventAttrs["gen_ai.input.messages"], toolName, "user");
+    addTurnsFromMessagesArray(turns, span, eventAttrs["gen_ai.output.messages"], toolName, "assistant");
+  }
+
+  return turns;
+}
+
+function extractGenerateTextWrapperTurns(span: NormalizedSpan): ConversationTurnDraft[] {
+  const attrs = span.attributes;
+  const turns: ConversationTurnDraft[] = [];
+  if (parseMaybeJsonArray(attrs["ai.prompt.messages"])) {
+    return turns;
+  }
+  const prompt = readFirstString(attrs, ["ai.prompt"]);
+  if (prompt) {
+    const parsed = parseMaybeJsonObject(prompt);
+    if (parsed) {
+      addTurn(turns, span, "system", "message", readString(parsed, "system"));
+      addTurn(turns, span, "user", "message", readString(parsed, "prompt") ?? readString(parsed, "messages"));
+    } else {
+      addTurn(turns, span, "user", "message", prompt);
+    }
+  }
+  addTurn(
+    turns,
+    span,
+    "assistant",
+    "message",
+    readFirstString(attrs, ["ai.response.text", "gen_ai.completion", "gen_ai.output"]),
+    undefined,
+    readAssistantReasoning(attrs)
+  );
+  return turns;
+}
+
+function buildTraceConversation(
+  spans: NormalizedSpan[],
+  genAiSpans: ReturnType<typeof classifyGenAiSpan>[]
+): ConversationTurnDraft[] {
+  const spanById = new Map(spans.map((span) => [span.spanId, span]));
+  const inferenceSpans = spans
+    .filter((span) => span.name === "ai.generateText.doGenerate")
+    .sort((a, b) => Number(a.startTimeUnixNano) - Number(b.startTimeUnixNano));
+
+  if (inferenceSpans.length === 0) {
+    return genAiSpans
+      .sort((a, b) => Number(a.startTimeUnixNano) - Number(b.startTimeUnixNano))
+      .flatMap((span) => span.conversationTurns);
+  }
+
+  const turns: ConversationTurnDraft[] = [];
+  const seen = new Set<string>();
+  let previousPromptLength = 0;
+  let currentStepId: string | undefined;
+
+  for (const span of inferenceSpans) {
+    const stepId = findAgentStepSpanId(span, spanById);
+    if (stepId !== currentStepId) {
+      currentStepId = stepId;
+      previousPromptLength = 0;
+    }
+
+    const attrs = span.attributes;
+    const toolName = readToolNameFromAttrs(attrs);
+    const promptMessages = parseMaybeJsonArray(attrs["ai.prompt.messages"]) ?? [];
+
+    for (let index = previousPromptLength; index < promptMessages.length; index += 1) {
+      const entry = promptMessages[index];
+      if (!isRecord(entry)) {
+        continue;
+      }
+      addTurnsFromMessageEntry(turns, span, entry, toolName, seen);
+    }
+    previousPromptLength = promptMessages.length;
+
+    addTurnDeduped(
+      seen,
+      turns,
+      span,
+      "assistant",
+      "message",
+      readFirstString(attrs, ["ai.response.text", "gen_ai.completion", "gen_ai.output"]),
+      undefined,
+      readAssistantReasoning(attrs)
+    );
+    addTurnsFromToolCallsDeduped(turns, span, attrs["ai.response.toolCalls"], toolName, seen);
+    addTurnDeduped(
+      seen,
+      turns,
+      span,
+      "tool",
+      "tool-call",
+      readFirstString(attrs, ["ai.toolCall.args", "tool.input", "tool.args", "tool.arguments"]),
+      toolName
+    );
+    addTurnDeduped(
+      seen,
+      turns,
+      span,
+      "tool",
+      "tool-result",
+      readFirstString(attrs, ["ai.toolCall.result", "tool.output", "tool.result"]),
+      toolName
+    );
+  }
+
+  return turns;
+}
+
+function extractConversationTurns(span: NormalizedSpan) {
+  if (span.name === "ai.generateText.doGenerate") {
+    return extractInferenceSpanTurns(span);
+  }
+  if (span.name === "ai.generateText") {
+    return extractGenerateTextWrapperTurns(span);
+  }
+
+  const attrs = span.attributes;
+  const turns: ConversationTurnDraft[] = [];
+  const toolName = readToolNameFromAttrs(attrs);
 
   addTurn(turns, span, "system", "message", readFirstString(attrs, ["gen_ai.system.message", "llm.system", "system"]));
   addTurn(turns, span, "user", "message", readFirstString(attrs, [
@@ -814,68 +1025,117 @@ function addTurnsFromMessagesArray(
   if (!list) return;
   for (const entry of list) {
     if (!isRecord(entry)) continue;
-    const role = conversationRole(readString(entry, "role")) ?? defaultRole;
-    const parts = parseMaybeJsonArray(entry.parts);
-    if (parts && parts.length > 0) {
-      const textChunks: string[] = [];
-      const reasoningChunks: string[] = [];
-      const toolCalls: Array<{ name: string | undefined; content: string }> = [];
-      const toolResults: Array<{ name: string | undefined; content: string }> = [];
-      for (const part of parts) {
-        if (typeof part === "string") {
-          textChunks.push(part);
+    addTurnsFromMessageEntry(turns, span, entry, fallbackToolName, undefined, defaultRole);
+  }
+}
+
+function addTurnsFromMessageEntry(
+  turns: ConversationTurnDraft[],
+  span: NormalizedSpan,
+  entry: Record<string, unknown>,
+  fallbackToolName: string | undefined,
+  seen: Set<string> | undefined,
+  defaultRole: "user" | "assistant" = "user"
+) {
+  const role = conversationRole(readString(entry, "role")) ?? defaultRole;
+  const parts = parseMaybeJsonArray(entry.parts) ?? parseMaybeJsonArray(entry.content);
+  if (parts && parts.length > 0) {
+    const textChunks: string[] = [];
+    const reasoningChunks: string[] = [];
+    const toolCalls: Array<{ name: string | undefined; content: string }> = [];
+    const toolResults: Array<{ name: string | undefined; content: string }> = [];
+    for (const part of parts) {
+      if (typeof part === "string") {
+        textChunks.push(part);
+        continue;
+      }
+      if (!isRecord(part)) continue;
+      const type = (readString(part, "type") ?? "text").toLowerCase();
+      if (type === "tool_call" || type === "tool-call" || type === "tool_use") {
+        const name = readString(part, "name")
+          ?? readString(part, "tool_name")
+          ?? readString(part, "toolName")
+          ?? fallbackToolName;
+        const args = flattenContentValue(part.arguments ?? part.input ?? part.parameters);
+        if (args) {
+          toolCalls.push({ name, content: args });
+        }
+      } else if (type === "tool_call_response" || type === "tool_result" || type === "tool-result") {
+        const name = readString(part, "name")
+          ?? readString(part, "tool_name")
+          ?? readString(part, "toolName")
+          ?? fallbackToolName;
+        const result = flattenContentValue(part.response ?? part.result ?? part.output ?? part.content);
+        if (result) {
+          toolResults.push({ name, content: result });
+        }
+      } else if (type === "reasoning" || type === "reasoning_content" || type === "thinking" || type === "text") {
+        const text = flattenContentValue(part.content ?? part.text ?? part.thinking ?? part.reasoning ?? part.value ?? part);
+        if (!text) {
           continue;
         }
-        if (!isRecord(part)) continue;
-        const type = readString(part, "type")?.toLowerCase() ?? "text";
-        if (type === "tool_call" || type === "tool-call" || type === "tool_use") {
-          const name = readString(part, "name") ?? readString(part, "tool_name") ?? fallbackToolName;
-          const args = flattenContentValue(part.arguments ?? part.input ?? part.parameters);
-          if (args) {
-            toolCalls.push({ name, content: args });
-          }
-        } else if (type === "tool_call_response" || type === "tool_result" || type === "tool-result") {
-          const name = readString(part, "name") ?? readString(part, "tool_name") ?? fallbackToolName;
-          const result = flattenContentValue(part.response ?? part.result ?? part.output ?? part.content);
-          if (result) {
-            toolResults.push({ name, content: result });
-          }
-        } else if (type === "reasoning" || type === "reasoning_content" || type === "thinking") {
-          const reasoning = flattenContentValue(part.content ?? part.text ?? part.thinking ?? part.reasoning ?? part.value);
-          if (reasoning) {
-            reasoningChunks.push(reasoning);
-          }
+        if (type === "reasoning" || type === "reasoning_content" || type === "thinking") {
+          reasoningChunks.push(text);
         } else {
-          const text = flattenContentValue(part.content ?? part.text ?? part.value ?? part);
-          if (text) {
-            textChunks.push(text);
-          }
+          textChunks.push(text);
+        }
+      } else {
+        const text = flattenContentValue(part.content ?? part.text ?? part.value ?? part);
+        if (text) {
+          textChunks.push(text);
         }
       }
-      const reasoning = reasoningChunks.length > 0 ? reasoningChunks.join("\n\n") : undefined;
-      if (textChunks.length > 0) {
-        addTurn(turns, span, role, "message", textChunks.join("\n\n"), undefined, reasoning);
-      } else if (reasoning) {
-        // Reasoning-only message (assistant chain of thought without final text yet).
-        addTurn(turns, span, role, "message", "", undefined, reasoning);
-      }
-      for (const call of toolCalls) {
-        addTurn(turns, span, "tool", "tool-call", call.content, call.name);
-      }
-      for (const result of toolResults) {
-        addTurn(turns, span, "tool", "tool-result", result.content, result.name);
-      }
-    } else {
-      const content = extractMessageContent(entry);
-      const reasoning = extractReasoningContent(entry);
-      if (content) {
-        addTurn(turns, span, role, "message", content, undefined, reasoning);
-      } else if (reasoning) {
-        addTurn(turns, span, role, "message", "", undefined, reasoning);
-      }
     }
-    addTurnsFromToolCalls(turns, span, entry.tool_calls, fallbackToolName);
+    const reasoning = reasoningChunks.length > 0 ? reasoningChunks.join("\n\n") : undefined;
+    if (textChunks.length > 0) {
+      pushTurn(turns, span, role, "message", textChunks.join("\n\n"), undefined, reasoning, seen);
+    } else if (reasoning) {
+      pushTurn(turns, span, role, "message", "", undefined, reasoning, seen);
+    }
+    for (const call of toolCalls) {
+      pushTurn(turns, span, "tool", "tool-call", call.content, call.name, undefined, seen);
+    }
+    for (const result of toolResults) {
+      pushTurn(turns, span, "tool", "tool-result", result.content, result.name, undefined, seen);
+    }
+    return;
   }
+
+  const content = extractMessageContent(entry);
+  const reasoning = extractReasoningContent(entry);
+  if (content) {
+    pushTurn(turns, span, role, "message", content, undefined, reasoning, seen);
+  } else if (reasoning) {
+    pushTurn(turns, span, role, "message", "", undefined, reasoning, seen);
+  }
+  addTurnsFromToolCalls(turns, span, entry.tool_calls, fallbackToolName, seen);
+}
+
+function pushTurn(
+  turns: ConversationTurnDraft[],
+  span: NormalizedSpan,
+  role: "system" | "user" | "assistant" | "tool",
+  kind: "message" | "tool-call" | "tool-result",
+  value?: string,
+  name?: string,
+  reasoning?: string | undefined,
+  seen?: Set<string>
+) {
+  if (seen) {
+    addTurnDeduped(seen, turns, span, role, kind, value, name, reasoning);
+    return;
+  }
+  addTurn(turns, span, role, kind, value, name, reasoning);
+}
+
+function addTurnsFromToolCallsDeduped(
+  turns: ConversationTurnDraft[],
+  span: NormalizedSpan,
+  value: unknown,
+  fallbackName: string | undefined,
+  seen: Set<string>
+) {
+  addTurnsFromToolCalls(turns, span, value, fallbackName, seen);
 }
 
 function extractMessageContent(record: Record<string, unknown>): string | undefined {
@@ -944,6 +1204,12 @@ function flattenContentValue(value: unknown): string | undefined {
       const hash = typeof value.sha256 === "string" ? `, hash ${value.sha256}` : "";
       return `[redacted ${bytes}${hash}]`;
     }
+    if (value.type === "json" && "value" in value) {
+      const nested = flattenContentValue(value.value);
+      if (nested) {
+        return nested;
+      }
+    }
     const text = readString(value, "text") ?? readString(value, "content") ?? readString(value, "value");
     if (text) return text;
     return safeStringify(value);
@@ -976,18 +1242,22 @@ function addTurnsFromToolCalls(
   turns: ConversationTurnDraft[],
   span: NormalizedSpan,
   value: unknown,
-  fallbackName: string | undefined
+  fallbackName: string | undefined,
+  seen?: Set<string>
 ) {
   const list = parseMaybeJsonArray(value);
   if (!list) return;
   for (const entry of list) {
     if (!isRecord(entry)) continue;
     const fn = isRecord(entry.function) ? entry.function : entry;
-    const callName = readString(fn, "name") ?? readString(entry, "name") ?? fallbackName;
+    const callName = readString(fn, "name")
+      ?? readString(entry, "name")
+      ?? readString(entry, "toolName")
+      ?? fallbackName;
     const argsValue = fn.arguments ?? entry.arguments ?? entry.input ?? entry.parameters;
     const args = flattenContentValue(argsValue);
     if (args) {
-      addTurn(turns, span, "tool", "tool-call", args, callName);
+      pushTurn(turns, span, "tool", "tool-call", args, callName, undefined, seen);
     }
   }
 }
