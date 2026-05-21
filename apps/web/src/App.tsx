@@ -367,6 +367,7 @@ export function App() {
   }, [metrics.data, selectedMetricKey]);
 
   const serviceNames = useMemo(() => resources.data?.map((item) => item.serviceName) ?? [], [resources.data]);
+  const serviceAvatarMap = useMemo(() => createResourceAvatarMap(serviceNames), [serviceNames]);
   const trace = selectedTrace.data;
   const filteredLogs = useMemo(() => {
     const items = logs.data ?? [];
@@ -465,6 +466,7 @@ export function App() {
               service={service}
               onServiceChange={setService}
               services={serviceNames}
+              serviceAvatarMap={serviceAvatarMap}
               errorsOnly={errorsOnly}
               onErrorsOnlyChange={setErrorsOnly}
               severity={severity}
@@ -708,6 +710,7 @@ function FilterBar({
   service,
   onServiceChange,
   services,
+  serviceAvatarMap,
   errorsOnly,
   onErrorsOnlyChange,
   severity,
@@ -721,6 +724,7 @@ function FilterBar({
   service: string;
   onServiceChange(value: string): void;
   services: string[];
+  serviceAvatarMap: ReadonlyMap<string, ResourceAvatar>;
   errorsOnly: boolean;
   onErrorsOnlyChange(value: boolean): void;
   severity: string;
@@ -733,36 +737,38 @@ function FilterBar({
     <div className="filter-bar-inner">
       {showFilters ? (
         <>
-          <div className="filter-search">
-            <Search size={14} />
+          <label className="filter-control filter-search">
+            <Search size={14} aria-hidden="true" />
             <input
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
               placeholder={searchPlaceholder(page)}
+              aria-label={searchPlaceholder(page)}
             />
-          </div>
-          <div className="filter-select">
-            <Server size={14} />
-            <select value={service} onChange={(event) => onServiceChange(event.target.value)}>
-              <option value="">All resources</option>
-              {services.map((item) => (
-                <option value={item} key={item}>{item}</option>
-              ))}
-            </select>
-            <ChevronDown size={12} />
-          </div>
+          </label>
+          <ResourceFilterMenu
+            value={service}
+            services={services}
+            avatarMap={serviceAvatarMap}
+            onChange={onServiceChange}
+          />
           {page === "Logs" ? (
-            <div className="filter-select">
-              <AlertCircle size={14} />
-              <select value={severity} onChange={(event) => onSeverityChange(event.target.value)}>
+            <label className="filter-control filter-select">
+              <span className="filter-select-prefix">Level</span>
+              <AlertCircle size={14} aria-hidden="true" />
+              <select
+                value={severity}
+                onChange={(event) => onSeverityChange(event.target.value)}
+                aria-label="Log severity"
+              >
                 <option value="">All levels</option>
                 <option value="error">Error</option>
                 <option value="warn">Warn</option>
                 <option value="info">Info</option>
                 <option value="debug">Debug</option>
               </select>
-              <ChevronDown size={12} />
-            </div>
+              <ChevronDown size={12} className="filter-select-chevron" aria-hidden="true" />
+            </label>
           ) : null}
           {page === "Traces" || page === "GenAI" ? (
             <button className={errorsOnly ? "chip-toggle active" : "chip-toggle"} onClick={() => onErrorsOnlyChange(!errorsOnly)}>
@@ -782,6 +788,118 @@ function FilterBar({
           <span>{clearing ? "Clearing…" : "Clear data"}</span>
         </button>
       </div>
+    </div>
+  );
+}
+
+function ResourceFilterMenu({ value, services, avatarMap, onChange }: {
+  value: string;
+  services: string[];
+  avatarMap: ReadonlyMap<string, ResourceAvatar>;
+  onChange(value: string): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const selectedAvatar = value ? avatarMap.get(value) ?? createResourceAvatar(value) : undefined;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocumentClick = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocumentClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocumentClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const selectResource = (nextValue: string) => {
+    onChange(nextValue);
+    setOpen(false);
+  };
+
+  const displayLabel = value || "All resources";
+
+  return (
+    <div className="resource-filter" ref={containerRef}>
+      <button
+        type="button"
+        className={open ? "filter-control resource-filter-trigger open" : "filter-control resource-filter-trigger"}
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Resource filter: ${displayLabel}`}
+        title={value ? `Filtered to ${value}` : "All resources"}
+      >
+        <span className="resource-filter-prefix">Resource</span>
+        <span className="resource-filter-value">
+          {selectedAvatar ? (
+            <span className={`resource-avatar resource-filter-avatar resource-avatar-color-${selectedAvatar.colorIndex}`} aria-hidden="true">
+              {selectedAvatar.label}
+            </span>
+          ) : (
+            <span className="resource-filter-all-icon" aria-hidden="true">
+              <Server size={13} />
+            </span>
+          )}
+          <span className="resource-filter-label" title={displayLabel}>{displayLabel}</span>
+        </span>
+        <ChevronDown size={12} className="resource-filter-chevron" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div className="resource-filter-menu" role="listbox" aria-label="Resources">
+          <div className="resource-filter-menu-head">
+            <span>Filter by resource</span>
+            <span className="resource-filter-menu-count">{services.length.toLocaleString()}</span>
+          </div>
+          <div className="resource-filter-menu-body">
+            <button
+              type="button"
+              role="option"
+              aria-selected={value === ""}
+              className={value === "" ? "resource-filter-option active" : "resource-filter-option"}
+              onClick={() => selectResource("")}
+            >
+              <span className="resource-filter-all-icon" aria-hidden="true">
+                <Server size={13} />
+              </span>
+              <span className="resource-filter-option-label">All resources</span>
+              {value === "" ? <Check size={13} className="resource-filter-check" /> : null}
+            </button>
+            {services.length > 0 ? <div className="resource-filter-divider" role="separator" /> : null}
+            {services.length === 0 ? (
+              <p className="resource-filter-empty">No resources reporting yet</p>
+            ) : (
+              services.map((item) => {
+                const avatar = avatarMap.get(item) ?? createResourceAvatar(item);
+                return (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={item === value}
+                    className={item === value ? "resource-filter-option active" : "resource-filter-option"}
+                    key={item}
+                    onClick={() => selectResource(item)}
+                  >
+                    <span className={`resource-avatar resource-filter-avatar resource-avatar-color-${avatar.colorIndex}`} aria-hidden="true">
+                      {avatar.label}
+                    </span>
+                    <span className="resource-filter-option-label" title={item}>{item}</span>
+                    {item === value ? <Check size={13} className="resource-filter-check" /> : null}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -818,6 +936,10 @@ function ResourcesPage({ resources, loading, live, onOpenLogs, onOpenTraces, onO
     ),
     [resources, timestampSort]
   );
+  const avatarMap = useMemo(
+    () => createResourceAvatarMap(resources.map((item) => item.serviceName)),
+    [resources]
+  );
   if (loading && resources.length === 0) {
     return <EmptyPanel icon={RotateCw} title="Loading resources…" />;
   }
@@ -848,7 +970,7 @@ function ResourcesPage({ resources, loading, live, onOpenLogs, onOpenTraces, onO
         const state = resourceState(item.lastSeen);
         return (
           <div className="data-row resources-row" key={item.serviceName}>
-            <ResourceCell names={[item.serviceName]} showKind />
+            <ResourceCell names={[item.serviceName]} showKind avatarMap={avatarMap} />
             <span>
               <StatePill state={state} />
             </span>
@@ -898,16 +1020,26 @@ function StatePill({ state }: { state: "running" | "idle" | "stale" }) {
   );
 }
 
-function ResourceCell({ names, showKind = false }: { names: string[]; showKind?: boolean }) {
+interface ResourceAvatar {
+  label: string;
+  colorIndex: number;
+}
+
+function ResourceCell({ names, showKind = false, avatarMap }: {
+  names: string[];
+  showKind?: boolean;
+  avatarMap?: ReadonlyMap<string, ResourceAvatar>;
+}) {
   const primary = names[0];
   if (!primary) {
     return <span className="muted">—</span>;
   }
   const extra = names.length - 1;
+  const avatar = avatarMap?.get(primary) ?? createResourceAvatar(primary);
   return (
     <span className="resource-name">
-      <span className="resource-avatar" aria-hidden="true">
-        {primary.slice(0, 2).toUpperCase()}
+      <span className={`resource-avatar resource-avatar-color-${avatar.colorIndex}`} aria-hidden="true">
+        {avatar.label}
       </span>
       <span className="resource-name-text">
         <strong title={names.length > 1 ? names.join(", ") : primary}>{primary}</strong>
@@ -919,6 +1051,80 @@ function ResourceCell({ names, showKind = false }: { names: string[]; showKind?:
       </span>
     </span>
   );
+}
+
+function createResourceAvatarMap(names: string[]): Map<string, ResourceAvatar> {
+  const uniqueNames = Array.from(new Set(names.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const groups = new Map<string, string[]>();
+  for (const name of uniqueNames) {
+    const base = resourceInitialCandidates(name)[0] ?? "R";
+    groups.set(base, [...(groups.get(base) ?? []), name]);
+  }
+
+  const avatars = new Map<string, ResourceAvatar>();
+  for (const groupNames of groups.values()) {
+    if (groupNames.length === 1) {
+      const name = groupNames[0]!;
+      avatars.set(name, createResourceAvatar(name));
+      continue;
+    }
+
+    const used = new Set<string>();
+    groupNames.forEach((name, index) => {
+      const candidates = resourceInitialCandidates(name);
+      const label = candidates.find((candidate) => !used.has(candidate)) ?? resourceNumberedFallback(candidates[0] ?? "R", index, used);
+      used.add(label);
+      avatars.set(name, { label, colorIndex: resourceColorIndex(name) });
+    });
+  }
+  return avatars;
+}
+
+function createResourceAvatar(name: string): ResourceAvatar {
+  return {
+    label: resourceInitialCandidates(name)[0] ?? "R",
+    colorIndex: resourceColorIndex(name)
+  };
+}
+
+function resourceInitialCandidates(name: string): string[] {
+  const tokens = name
+    .split(/[^a-zA-Z0-9]+/)
+    .map((token) => token.trim().toUpperCase())
+    .filter(Boolean);
+  const compact = (tokens.join("") || name.replace(/[^a-zA-Z0-9]+/g, "").toUpperCase() || "RESOURCE");
+  const candidates = [
+    tokens.length >= 2 ? tokens.slice(0, 2).map((token) => token[0]).join("") : compact.slice(0, 2),
+    tokens.length >= 3 ? tokens.slice(0, 3).map((token) => token[0]).join("") : undefined,
+    tokens.length >= 2 ? `${tokens[0]![0]}${tokens[1]!.slice(0, 2)}` : undefined,
+    compact.slice(0, 3),
+    compact.length > 1 ? `${compact[0]}${compact[compact.length - 1]}` : compact
+  ];
+  return Array.from(new Set(candidates.filter((candidate): candidate is string => Boolean(candidate))));
+}
+
+function resourceNumberedFallback(base: string, index: number, used: Set<string>): string {
+  const prefix = base[0] ?? "R";
+  let suffix = index + 1;
+  let label = `${prefix}${suffix}`;
+  while (used.has(label)) {
+    suffix += 1;
+    label = `${prefix}${suffix}`;
+  }
+  return label;
+}
+
+function resourceColorIndex(name: string): number {
+  return stableHash(name) % 8;
+}
+
+function stableHash(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(hash, 31) + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash);
 }
 
 function LogsPage({ logs, loading, live, onOpenTrace, onPreviewJson }: {
@@ -935,6 +1141,10 @@ function LogsPage({ logs, loading, live, onOpenTrace, onPreviewJson }: {
       timestampSort
     ),
     [logs, timestampSort]
+  );
+  const avatarMap = useMemo(
+    () => createResourceAvatarMap(logs.map((log) => log.serviceName)),
+    [logs]
   );
   if (loading && logs.length === 0) {
     return <EmptyPanel icon={RotateCw} title="Loading structured logs…" />;
@@ -965,7 +1175,7 @@ function LogsPage({ logs, loading, live, onOpenTrace, onPreviewJson }: {
       {sortedLogs.map((log) => (
         <div className="data-row logs-row" key={log.id}>
           <span className="muted mono timestamp-cell">{formatTimestamp(log.timeUnixNano ?? log.observedTimeUnixNano)}</span>
-          <ResourceCell names={[log.serviceName]} />
+          <ResourceCell names={[log.serviceName]} avatarMap={avatarMap} />
           <span>
             <span className={severityClass(log.severityText)}>{(log.severityText ?? "INFO").toUpperCase()}</span>
           </span>
@@ -1015,6 +1225,10 @@ function TracesListPage({ traces, loading, live, onSelect, onPreviewJson }: {
     ),
     [traces, timestampSort]
   );
+  const avatarMap = useMemo(
+    () => createResourceAvatarMap(traces.flatMap((trace) => trace.serviceNames)),
+    [traces]
+  );
   const maxDuration = useMemo(() => Math.max(1, ...traces.map((t) => t.durationNano)), [traces]);
   if (loading && traces.length === 0) {
     return <EmptyPanel icon={RotateCw} title="Loading traces…" />;
@@ -1061,7 +1275,7 @@ function TracesListPage({ traces, loading, live, onSelect, onPreviewJson }: {
             tabIndex={0}
           >
             <span className="muted mono timestamp-cell">{formatTimestamp(trace.startTimeUnixNano)}</span>
-            <ResourceCell names={trace.serviceNames} />
+            <ResourceCell names={trace.serviceNames} avatarMap={avatarMap} />
             <CopyableCode value={trace.traceId} display={shortId(trace.traceId)} copyLabel="Copy trace ID" />
             <span className="cell-strong">
               <strong>
