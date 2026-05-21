@@ -59,6 +59,7 @@ import {
   type TraceDetail,
   type TraceSummary
 } from "./api.js";
+import { DataGrid, limitRowsForLiveView, type SortDirection } from "./dataGrid.js";
 
 type PageKey = "Resources" | "Logs" | "Traces" | "Metrics" | "GenAI" | "Settings";
 
@@ -76,7 +77,6 @@ const STALE_THRESHOLD_MS = 30_000;
 
 type TimeRangeId = "5m" | "15m" | "1h" | "6h" | "24h" | "all";
 type ThemeMode = "light" | "dark" | "system";
-type SortDirection = "asc" | "desc";
 const TIME_RANGE_STORAGE_KEY = "otlp-time-range";
 const TIME_RANGES: Array<{ id: TimeRangeId; label: string; durationMs: number | null }> = [
   { id: "5m", label: "Last 5 minutes", durationMs: 5 * 60_000 },
@@ -480,6 +480,7 @@ export function App() {
             <ResourcesPage
               resources={resources.data ?? []}
               loading={resources.isLoading}
+              live={!paused}
               onOpenLogs={(name) => {
                 setService(name);
                 setActivePage("Logs");
@@ -498,6 +499,7 @@ export function App() {
             <LogsPage
               logs={filteredLogs}
               loading={logs.isLoading}
+              live={!paused}
               onOpenTrace={(traceId) => {
                 setSelectedTraceId(traceId);
                 setActivePage("Traces");
@@ -523,6 +525,7 @@ export function App() {
               <TracesListPage
                 traces={traces.data ?? []}
                 loading={traces.isLoading}
+                live={!paused}
                 onSelect={(id) => setSelectedTraceId(id)}
                 onPreviewJson={openTraceJsonPreview}
               />
@@ -798,9 +801,10 @@ function searchPlaceholder(page: PageKey) {
   }
 }
 
-function ResourcesPage({ resources, loading, onOpenLogs, onOpenTraces, onOpenMetrics, onPreviewJson }: {
+function ResourcesPage({ resources, loading, live, onOpenLogs, onOpenTraces, onOpenMetrics, onPreviewJson }: {
   resources: Array<{ serviceName: string; spanCount: number; logCount: number; lastSeen: number }>;
   loading: boolean;
+  live: boolean;
   onOpenLogs(name: string): void;
   onOpenTraces(name: string): void;
   onOpenMetrics(name: string): void;
@@ -808,7 +812,10 @@ function ResourcesPage({ resources, loading, onOpenLogs, onOpenTraces, onOpenMet
 }) {
   const [timestampSort, setTimestampSort] = useState<SortDirection>("desc");
   const sortedResources = useMemo(
-    () => sortByTimestamp(resources, timestampSort, (item) => item.lastSeen),
+    () => limitRowsForLiveView(
+      sortByTimestamp(resources, timestampSort, (item) => item.lastSeen),
+      timestampSort
+    ),
     [resources, timestampSort]
   );
   if (loading && resources.length === 0) {
@@ -818,17 +825,25 @@ function ResourcesPage({ resources, loading, onOpenLogs, onOpenTraces, onOpenMet
     return <EmptyPanel icon={Server} title="No resources yet" body={<>Send a span or log to <code>localhost:4318</code> and the reporting resource will appear here.</>} />;
   }
   return (
-    <div className="panel data-grid resources-grid">
-      <div className="data-row data-head resources-row">
-        <span>Resource</span>
-        <span>State</span>
-        <span>Spans</span>
-        <span>Logs</span>
-        <SortHeader direction={timestampSort} onToggle={() => setTimestampSort(toggleSortDirection)}>
-          Timestamp
-        </SortHeader>
-        <span>Actions</span>
-      </div>
+    <DataGrid
+      className="resources-grid"
+      itemCount={sortedResources.length}
+      timestampSort={timestampSort}
+      live={live}
+      truncatedTotal={resources.length}
+      header={(
+        <div className="data-row data-head resources-row">
+          <span>Resource</span>
+          <span>State</span>
+          <span>Spans</span>
+          <span>Logs</span>
+          <SortHeader direction={timestampSort} onToggle={() => setTimestampSort(toggleSortDirection)}>
+            Timestamp
+          </SortHeader>
+          <span>Actions</span>
+        </div>
+      )}
+    >
       {sortedResources.map((item) => {
         const state = resourceState(item.lastSeen);
         return (
@@ -861,7 +876,7 @@ function ResourcesPage({ resources, loading, onOpenLogs, onOpenTraces, onOpenMet
           </div>
         );
       })}
-    </div>
+    </DataGrid>
   );
 }
 
@@ -906,15 +921,19 @@ function ResourceCell({ names, showKind = false }: { names: string[]; showKind?:
   );
 }
 
-function LogsPage({ logs, loading, onOpenTrace, onPreviewJson }: {
+function LogsPage({ logs, loading, live, onOpenTrace, onPreviewJson }: {
   logs: LogRecord[];
   loading: boolean;
+  live: boolean;
   onOpenTrace(traceId: string): void;
   onPreviewJson(filename: string, data: unknown): void;
 }) {
   const [timestampSort, setTimestampSort] = useState<SortDirection>("desc");
   const sortedLogs = useMemo(
-    () => sortByTimestamp(logs, timestampSort, (log) => nanoToMillis(log.timeUnixNano ?? log.observedTimeUnixNano)),
+    () => limitRowsForLiveView(
+      sortByTimestamp(logs, timestampSort, (log) => nanoToMillis(log.timeUnixNano ?? log.observedTimeUnixNano)),
+      timestampSort
+    ),
     [logs, timestampSort]
   );
   if (loading && logs.length === 0) {
@@ -924,24 +943,32 @@ function LogsPage({ logs, loading, onOpenTrace, onPreviewJson }: {
     return <EmptyPanel icon={FileText} title="No structured logs" body={<>Emit logs to <code>localhost:4318/v1/logs</code> to see them here.</>} />;
   }
   return (
-    <div className="panel data-grid logs-grid">
-      <div className="data-row data-head logs-row">
-        <span>Resource</span>
-        <span>Level</span>
-        <SortHeader direction={timestampSort} onToggle={() => setTimestampSort(toggleSortDirection)}>
-          Timestamp
-        </SortHeader>
-        <span>Message</span>
-        <span>TraceId</span>
-        <span>Actions</span>
-      </div>
+    <DataGrid
+      className="logs-grid"
+      itemCount={sortedLogs.length}
+      timestampSort={timestampSort}
+      live={live}
+      truncatedTotal={logs.length}
+      header={(
+        <div className="data-row data-head logs-row">
+          <SortHeader direction={timestampSort} onToggle={() => setTimestampSort(toggleSortDirection)}>
+            Timestamp
+          </SortHeader>
+          <span>Resource</span>
+          <span>Level</span>
+          <span>Message</span>
+          <span>TraceId</span>
+          <span>Actions</span>
+        </div>
+      )}
+    >
       {sortedLogs.map((log) => (
         <div className="data-row logs-row" key={log.id}>
+          <span className="muted mono timestamp-cell">{formatTimestamp(log.timeUnixNano ?? log.observedTimeUnixNano)}</span>
           <ResourceCell names={[log.serviceName]} />
           <span>
             <span className={severityClass(log.severityText)}>{(log.severityText ?? "INFO").toUpperCase()}</span>
           </span>
-          <span className="muted mono timestamp-cell">{formatTimestamp(log.timeUnixNano ?? log.observedTimeUnixNano)}</span>
           <span className="cell-message" title={log.bodyText ?? ""}>
             {log.bodyText ?? JSON.stringify(log.bodyJson ?? log.attributes)}
           </span>
@@ -969,19 +996,23 @@ function LogsPage({ logs, loading, onOpenTrace, onPreviewJson }: {
           </span>
         </div>
       ))}
-    </div>
+    </DataGrid>
   );
 }
 
-function TracesListPage({ traces, loading, onSelect, onPreviewJson }: {
+function TracesListPage({ traces, loading, live, onSelect, onPreviewJson }: {
   traces: TraceSummary[];
   loading: boolean;
+  live: boolean;
   onSelect(id: string): void;
   onPreviewJson(traceId: string, fallback?: TraceSummary): void;
 }) {
   const [timestampSort, setTimestampSort] = useState<SortDirection>("desc");
   const sortedTraces = useMemo(
-    () => sortByTimestamp(traces, timestampSort, (trace) => nanoToMillis(trace.startTimeUnixNano)),
+    () => limitRowsForLiveView(
+      sortByTimestamp(traces, timestampSort, (trace) => nanoToMillis(trace.startTimeUnixNano)),
+      timestampSort
+    ),
     [traces, timestampSort]
   );
   const maxDuration = useMemo(() => Math.max(1, ...traces.map((t) => t.durationNano)), [traces]);
@@ -992,19 +1023,27 @@ function TracesListPage({ traces, loading, onSelect, onPreviewJson }: {
     return <EmptyPanel icon={GitBranch} title="No traces yet" body={<>Send a span to <code>localhost:4318/v1/traces</code> to populate the list.</>} />;
   }
   return (
-    <div className="panel data-grid traces-grid">
-      <div className="data-row data-head traces-row">
-        <SortHeader direction={timestampSort} onToggle={() => setTimestampSort(toggleSortDirection)}>
-          Timestamp
-        </SortHeader>
-        <span>TraceId</span>
-        <span>Name</span>
-        <span>Resource</span>
-        <span>Spans</span>
-        <span>Duration</span>
-        <span>Errors</span>
-        <span>Actions</span>
-      </div>
+    <DataGrid
+      className="traces-grid"
+      itemCount={sortedTraces.length}
+      timestampSort={timestampSort}
+      live={live}
+      truncatedTotal={traces.length}
+      header={(
+        <div className="data-row data-head traces-row">
+          <SortHeader direction={timestampSort} onToggle={() => setTimestampSort(toggleSortDirection)}>
+            Timestamp
+          </SortHeader>
+          <span>Resource</span>
+          <span>TraceId</span>
+          <span>Name</span>
+          <span>Spans</span>
+          <span>Duration</span>
+          <span>Errors</span>
+          <span>Actions</span>
+        </div>
+      )}
+    >
       {sortedTraces.map((trace) => {
         const portion = trace.durationNano / maxDuration;
         return (
@@ -1022,6 +1061,7 @@ function TracesListPage({ traces, loading, onSelect, onPreviewJson }: {
             tabIndex={0}
           >
             <span className="muted mono timestamp-cell">{formatTimestamp(trace.startTimeUnixNano)}</span>
+            <ResourceCell names={trace.serviceNames} />
             <CopyableCode value={trace.traceId} display={shortId(trace.traceId)} copyLabel="Copy trace ID" />
             <span className="cell-strong">
               <strong>
@@ -1031,7 +1071,6 @@ function TracesListPage({ traces, loading, onSelect, onPreviewJson }: {
                 ) : null}
               </strong>
             </span>
-            <ResourceCell names={trace.serviceNames} />
             <span className="num">{trace.spanCount}</span>
             <span className="duration-cell">
               <DurationRadial portion={portion} />
@@ -1062,7 +1101,7 @@ function TracesListPage({ traces, loading, onSelect, onPreviewJson }: {
           </div>
         );
       })}
-    </div>
+    </DataGrid>
   );
 }
 
@@ -1296,16 +1335,39 @@ function MessagesView({ turns }: { turns: ConversationTurn[] }) {
 
 type CopyMode = "plain" | "escaped";
 
+function tryParseJsonContent(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!(trimmed.startsWith("{") && trimmed.endsWith("}")) && !(trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function defaultJsonPretty(turn: ConversationTurn): boolean {
+  return turn.kind === "tool-call" || turn.kind === "tool-result";
+}
+
 function MessageCard({ turn }: { turn: ConversationTurn }) {
   const [view, setView] = useState<"preview" | "raw">("preview");
   const [copied, setCopied] = useState<CopyMode | null>(null);
   const [reasoningOpen, setReasoningOpen] = useState(false);
+  const [jsonPretty, setJsonPretty] = useState(() => defaultJsonPretty(turn));
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const meta = messageRoleMeta(turn);
   const hasContent = turn.contentPreview.length > 0;
   const isRedacted = hasContent && turn.contentPreview.startsWith("[redacted");
   const reasoning = turn.reasoningPreview ?? "";
   const hasReasoning = reasoning.length > 0;
+  const parsedJson = useMemo(() => tryParseJsonContent(turn.contentPreview), [turn.contentPreview]);
+  const canPrettifyJson = parsedJson !== null;
+
+  useEffect(() => {
+    setJsonPretty(defaultJsonPretty(turn));
+  }, [turn.contentPreview, turn.kind]);
 
   useEffect(() => () => {
     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
@@ -1342,6 +1404,17 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
             <button type="button" className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}>Preview</button>
             <button type="button" className={view === "raw" ? "active" : ""} onClick={() => setView("raw")}>Raw</button>
           </div>
+          {view === "preview" && canPrettifyJson ? (
+            <button
+              type="button"
+              className={`message-action-button${jsonPretty ? " active" : ""}`}
+              onClick={() => setJsonPretty((value) => !value)}
+              title={jsonPretty ? "Show compact JSON" : "Pretty-print JSON for easier reading"}
+            >
+              <Braces size={12} />
+              <span>Prettier</span>
+            </button>
+          ) : null}
           <span className="message-controls-divider" aria-hidden="true" />
           <button
             type="button"
@@ -1395,7 +1468,7 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
       <div className="message-body">
         {hasContent ? (
           isRedacted ? <p className="message-redacted">{turn.contentPreview}</p> : view === "preview" ? (
-            <div className="message-preview">{renderMessagePreview(turn)}</div>
+            <div className="message-preview">{renderMessagePreview(turn, jsonPretty)}</div>
           ) : (
             <pre className="message-raw">{turn.contentPreview}</pre>
           )
@@ -1407,18 +1480,15 @@ function MessageCard({ turn }: { turn: ConversationTurn }) {
   );
 }
 
-function renderMessagePreview(turn: ConversationTurn): React.ReactNode {
+function renderMessagePreview(turn: ConversationTurn, jsonPretty: boolean): React.ReactNode {
   const text = turn.contentPreview;
-  if (turn.kind === "tool-call" || turn.kind === "tool-result") {
-    const trimmed = text.trim();
-    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        return <pre className="message-json">{JSON.stringify(parsed, null, 2)}</pre>;
-      } catch {
-        // fall through
-      }
-    }
+  const parsed = tryParseJsonContent(text);
+  if (parsed !== null) {
+    return (
+      <pre className="message-json">
+        {jsonPretty ? JSON.stringify(parsed, null, 2) : text.trim()}
+      </pre>
+    );
   }
   return text.split(/\n+/).map((paragraph, index) => (
     <p key={index}>{paragraph}</p>
